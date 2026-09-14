@@ -14,14 +14,21 @@ struct TrackpadView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
-            Trackpad(client: client, air: air, mode: mode)
-                .background(surfaceTint)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .overlay(surfaceLabel)
-                .padding(12)
+            HStack(spacing: 8) {
+                Trackpad(client: client, air: air, mode: mode)
+                    .background(surfaceTint)
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(surfaceLabel)
+
+                if mode == .airMouse {
+                    ScrollStrip(air: air)
+                        .frame(width: 66)
+                }
+            }
+            .padding(12)
 
             if mode == .airMouse {
-                sensitivity
+                sliders
             }
 
             legend
@@ -40,9 +47,9 @@ struct TrackpadView: View {
     private var surfaceTint: Color {
         guard mode == .airMouse else { return Color(.secondarySystemBackground) }
         switch air.aim {
-        case .idle: return Color(.secondarySystemBackground)
+        case .idle, .aiming(.scroll): return Color(.secondarySystemBackground)
         case .arming: return Color.accentColor.opacity(0.08)
-        case .aiming: return Color.accentColor.opacity(0.18)
+        case .aiming(.pointer): return Color.accentColor.opacity(0.18)
         }
     }
 
@@ -50,34 +57,40 @@ struct TrackpadView: View {
         Text(surfaceText)
             .font(.footnote)
             .foregroundStyle(.tertiary)
-            .animation(.none, value: surfaceText)
     }
 
     private var surfaceText: String {
         guard mode == .airMouse else { return "trackpad" }
         switch air.aim {
-        case .idle: return "hold to aim"
+        case .idle, .aiming(.scroll): return "hold to aim"
         case .arming: return "release to click"
-        case .aiming: return "aiming"
+        case .aiming(.pointer): return "aiming"
         }
     }
 
-    private var sensitivity: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "tortoise.fill")
-            Slider(
-                value: $air.sensitivity,
-                in: 500...8000,
-                onEditingChanged: { editing in
-                    if !editing { air.persistSensitivity() }
-                }
-            )
-            Image(systemName: "hare.fill")
+    private var sliders: some View {
+        VStack(spacing: 2) {
+            slider("pointer", value: $air.sensitivity, range: 500...8000)
+            slider("scroll", value: $air.scrollSensitivity, range: 150...3000)
         }
-        .font(.caption)
+        .font(.caption2)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 20)
         .padding(.bottom, 6)
+    }
+
+    private func slider(
+        _ label: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>
+    ) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .frame(width: 46, alignment: .trailing)
+            Slider(value: value, in: range, onEditingChanged: { editing in
+                if !editing { air.persistSensitivity() }
+            })
+        }
     }
 
     private var legend: some View {
@@ -85,13 +98,15 @@ struct TrackpadView: View {
             Grid(horizontalSpacing: 14, verticalSpacing: 3) {
                 if mode == .airMouse {
                     row("hold anywhere", "aim by tilting")
+                    row("hold right edge", "scroll by tilting")
                 } else {
                     row("one finger drag", "move cursor")
                 }
                 row("one finger tap", "left click")
                 row("two fingers", "scroll · tap for right click")
                 row("three fingers", "middle click")
-                row("tap then hold", "drag")
+                row("double tap", "right click")
+                row("double tap, hold", "drag to select")
             }
             .font(.caption2)
 
@@ -120,6 +135,42 @@ struct TrackpadView: View {
     }
 }
 
+/// A dedicated strip that points the gyro at the scroll wheel instead of the
+/// cursor.
+///
+/// Only needs to know whether a finger is resting on it, with no finger count
+/// or tap discrimination, so a plain SwiftUI gesture is enough here — unlike
+/// the main surface, which has to drop to UIKit.
+private struct ScrollStrip: View {
+    @ObservedObject var air: AirMouse
+    @State private var held = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 18)
+            .fill(held ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground))
+            .overlay(
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        // onChanged repeats for every movement; engaging is a
+                        // one-shot.
+                        guard !held else { return }
+                        held = true
+                        air.setEngaged(true, target: .scroll)
+                    }
+                    .onEnded { _ in
+                        held = false
+                        air.setEngaged(false)
+                    }
+            )
+    }
+}
+
 /// Bridges the UIKit trackpad surface into SwiftUI. The gesture recognition
 /// itself lives in `TrackpadSurface` — SwiftUI gestures cannot report finger
 /// count.
@@ -134,7 +185,7 @@ private struct Trackpad: UIViewRepresentable {
         surface.onScroll = { dx, dy in client.scroll(dx: dx, dy: dy) }
         surface.onButton = { button, down in client.button(button, down: down) }
         surface.onClick = { button in client.click(button) }
-        surface.onEngageChanged = { engaged in air.setEngaged(engaged) }
+        surface.onEngageChanged = { engaged in air.setEngaged(engaged, target: .pointer) }
         surface.emitsTouchMotion = mode == .trackpad
         return surface
     }

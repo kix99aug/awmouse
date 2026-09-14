@@ -29,11 +29,16 @@ working on device.
 |---|---|
 | one finger drag | move cursor (Trackpad mode) |
 | one finger held | engage the gyro (Air Mouse mode) |
+| right-edge strip held | scroll by tilting (Air Mouse mode) |
 | one finger tap | left click |
 | two finger drag | scroll |
 | two finger tap | right click |
 | three finger tap | middle click |
-| tap, then press and drag | drag with left button held |
+| double tap, released | right click |
+| double tap, held | press left and drag — selection |
+
+Note that double tap fires its first left click before the right click, and
+that a true double click is no longer expressible — see DESIGN.md for why.
 
 Air Mouse aims by tilting the phone, and only while a finger rests on the
 surface — a gyro with no clutch sends the cursor wandering every time you move
@@ -44,7 +49,11 @@ it persists.
 Holding down does not move the cursor straight away. It stays put for a quarter
 second first: let go inside that pause and you get a click with the cursor
 exactly where you aimed, keep holding and it starts tracking. The surface tint
-tells you which of the two you are in.
+tells you which of the two you are in. The scroll strip has no such pause — it
+has no tap action, so there is nothing to disambiguate.
+
+Both sliders persist. Scroll wants a much gentler response than the pointer,
+which is why they are separate.
 
 If scrolling feels inverted, run the host with `-scroll-invert`; `-scroll-gain`
 adjusts its sensitivity. Pointer feel is `cursor.DefaultCurve` in

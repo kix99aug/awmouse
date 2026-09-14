@@ -29,16 +29,24 @@ final class TrackpadSurface: UIView {
     /// rotation move the cursor. See `GestureTiming`.
     private let tapMaxDuration = GestureTiming.tapMaxDuration
 
+    /// A tap followed by a press this soon begins the second half of a double
+    /// tap.
+    private let dragArmWindow = GestureTiming.dragArmWindow
+
     /// Travel required before committing to move-vs-scroll. Fingers rarely land
     /// on the same event, so a brief wait lets a two-finger gesture be seen as
     /// one rather than starting life as a cursor move.
     private let modeThreshold: CGFloat = 3
 
-    /// A tap followed by a press this soon becomes a drag, matching the
-    /// trackpad convention of double-tap-and-hold.
-    private let dragArmWindow = GestureTiming.dragArmWindow
-
-    private enum Mode { case undecided, moving, scrolling, dragging }
+    private enum Mode {
+        case undecided
+        case moving
+        case scrolling
+        /// The second press of a double tap, before it is known whether it will
+        /// be held (a selection drag) or released (a right click).
+        case dragPending
+        case dragging
+    }
 
     private var active: Set<UITouch> = []
     private var mode: Mode = .undecided
@@ -49,6 +57,7 @@ final class TrackpadSurface: UIView {
     private var lastCentroid: CGPoint = .zero
     private var pending = CGVector.zero
     private var dragArmedUntil = Date.distantPast
+    private var holdTask: Task<Void, Never>?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -76,16 +85,16 @@ final class TrackpadSurface: UIView {
 
             if active.count == 1 && Date() < dragArmedUntil {
                 dragArmedUntil = .distantPast
-                mode = .dragging
-                onButton?(.left, true)
+                beginDragPending()
             }
         } else {
             maxFingers = max(maxFingers, active.count)
 
-            // A second finger means this was never a drag after all — the first
-            // finger just landed fractionally earlier.
-            if mode == .dragging && active.count >= 2 {
-                onButton?(.left, false)
+            // A second finger means this was never half of a double tap after
+            // all — the first finger just landed fractionally earlier.
+            if mode == .dragPending || mode == .dragging {
+                cancelHold()
+                if mode == .dragging { onButton?(.left, false) }
                 mode = .undecided
             }
         }
@@ -106,7 +115,14 @@ final class TrackpadSurface: UIView {
         let dt = now.timeIntervalSince(lastSampleAt) * 1000
         lastSampleAt = now
 
-        if mode == .undecided {
+        switch mode {
+        case .dragPending:
+            // Hold the movement until the press resolves into a drag; emitting
+            // now would move the cursor for what may turn out to be a click.
+            pending.dx += dx
+            pending.dy += dy
+
+        case .undecided:
             pending.dx += dx
             pending.dy += dy
             guard travelled >= modeThreshold else { return }
@@ -114,10 +130,10 @@ final class TrackpadSurface: UIView {
             mode = active.count >= 2 ? .scrolling : .moving
             dispatch(dx: pending.dx, dy: pending.dy, dt: dt)
             pending = .zero
-            return
-        }
 
-        dispatch(dx: dx, dy: dy, dt: dt)
+        default:
+            dispatch(dx: dx, dy: dy, dt: dt)
+        }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -128,19 +144,29 @@ final class TrackpadSurface: UIView {
         }
 
         let duration = Date().timeIntervalSince(startedAt)
+        cancelHold()
 
-        if mode == .dragging {
+        switch mode {
+        case .dragging:
             onButton?(.left, false)
-        } else if travelled < tapSlop && duration < tapMaxDuration {
-            switch maxFingers {
-            case 1:
-                onClick?(.left)
-                // Arm the drag window: a press arriving now becomes a drag.
-                dragArmedUntil = Date().addingTimeInterval(dragArmWindow)
-            case 2:
-                onClick?(.right)
-            default:
-                onClick?(.middle)
+
+        case .dragPending:
+            // Released before the hold completed, so the double tap was not the
+            // start of a selection.
+            onClick?(.right)
+
+        default:
+            if travelled < tapSlop && duration < tapMaxDuration {
+                switch maxFingers {
+                case 1:
+                    onClick?(.left)
+                    // Arm the second half of a double tap.
+                    dragArmedUntil = Date().addingTimeInterval(dragArmWindow)
+                case 2:
+                    onClick?(.right)
+                default:
+                    onClick?(.middle)
+                }
             }
         }
 
@@ -153,10 +179,39 @@ final class TrackpadSurface: UIView {
             lastCentroid = centroid()
             return
         }
+        cancelHold()
         if mode == .dragging {
             onButton?(.left, false)
         }
         reset()
+    }
+
+    // MARK: - Double tap resolution
+
+    /// Starts the second half of a double tap. Which gesture it becomes is
+    /// decided by time rather than by movement, because in Air Mouse mode the
+    /// cursor is driven by rotation and the finger never moves at all — a
+    /// travel-based test would never fire there.
+    private func beginDragPending() {
+        mode = .dragPending
+        holdTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(GestureTiming.tapMaxDuration))
+            guard let self, !Task.isCancelled, self.mode == .dragPending else { return }
+
+            self.mode = .dragging
+            self.onButton?(.left, true)
+
+            // Release the movement withheld while the press was undecided.
+            if self.pending != .zero {
+                self.dispatch(dx: self.pending.dx, dy: self.pending.dy, dt: 8)
+                self.pending = .zero
+            }
+        }
+    }
+
+    private func cancelHold() {
+        holdTask?.cancel()
+        holdTask = nil
     }
 
     // MARK: - Helpers
@@ -168,7 +223,7 @@ final class TrackpadSurface: UIView {
         case .moving, .dragging:
             guard emitsTouchMotion else { return }
             onMove?(Double(dx), Double(dy), dt)
-        case .undecided:
+        case .undecided, .dragPending:
             break
         }
     }

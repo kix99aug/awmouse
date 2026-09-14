@@ -10,19 +10,27 @@ import MotionInput
 @MainActor
 final class AirMouse: ObservableObject {
     /// What the clutch is currently doing.
-    enum Aim {
+    enum Aim: Equatable {
         /// Nothing touching the surface.
         case idle
-        /// A finger has landed, but the cursor is still held still in case this
-        /// turns out to be a tap.
+        /// A finger has landed on the pointer surface, but the cursor is still
+        /// held still in case this turns out to be a tap.
         case arming
-        /// Held long enough to be a deliberate hold; rotation now moves the
-        /// cursor.
-        case aiming
+        /// Rotation is being forwarded.
+        case aiming(Target)
+    }
+
+    enum Target: Equatable {
+        case pointer
+        case scroll
     }
 
     @Published var sensitivity: Double {
-        didSet { source.config.sensitivity = sensitivity }
+        didSet { applySensitivity() }
+    }
+
+    @Published var scrollSensitivity: Double {
+        didSet { applySensitivity() }
     }
 
     @Published private(set) var aim: Aim = .idle
@@ -30,34 +38,56 @@ final class AirMouse: ObservableObject {
     private let source = MotionSource()
     private unowned let client: Client
     private var armTask: Task<Void, Never>?
+    private var target: Target = .pointer
+
+    /// The touch surface reports engagement in both input modes, and the
+    /// closure that does so captures whatever mode was current when the view
+    /// was built. Gating here rather than at the call site keeps that stale
+    /// capture from mattering.
+    private var isActive = false
 
     init(client: Client) {
         self.client = client
-        self.sensitivity = UserDefaults.standard.object(forKey: "airSensitivity") as? Double
-            ?? PointerFilter.Config().sensitivity
 
-        source.config.sensitivity = sensitivity
+        let defaults = UserDefaults.standard
+        self.sensitivity = defaults.object(forKey: "airSensitivity") as? Double
+            ?? PointerFilter.Config().sensitivity
+        self.scrollSensitivity = defaults.object(forKey: "airScrollSensitivity") as? Double
+            ?? 900
+
         source.onDelta = { [weak self] dx, dy, dt in
-            guard let self, self.aim == .aiming else { return }
-            self.client.move(dx: dx, dy: dy, dt: dt)
+            guard let self, case .aiming(let target) = self.aim else { return }
+            switch target {
+            case .pointer:
+                self.client.move(dx: dx, dy: dy, dt: dt)
+            case .scroll:
+                self.client.scroll(dx: dx, dy: dy)
+            }
         }
+
+        applySensitivity()
     }
 
     var isAvailable: Bool { source.isAvailable }
 
     func activate() {
+        isActive = true
         source.start()
     }
 
     func deactivate() {
+        isActive = false
         armTask?.cancel()
         armTask = nil
         source.stop()
         aim = .idle
     }
 
-    func setEngaged(_ engaged: Bool) {
-        guard engaged != (aim != .idle) else { return }
+    /// - Parameter target: which output the rotation should drive. Scrolling
+    ///   needs a far gentler response than the pointer, so the two carry
+    ///   separate sensitivities.
+    func setEngaged(_ engaged: Bool, target: Target = .pointer) {
+        guard isActive else { return }
 
         armTask?.cancel()
         armTask = nil
@@ -67,17 +97,28 @@ final class AirMouse: ObservableObject {
             return
         }
 
+        self.target = target
+        applySensitivity()
+        source.reengage()
+
+        // The pause exists only to tell a tap from a hold. The scroll strip has
+        // no tap action, so there is no ambiguity to resolve and waiting would
+        // be pure latency.
+        guard target == .pointer else {
+            aim = .aiming(.scroll)
+            return
+        }
+
         // Hold the cursor still until this is known not to be a tap. Without
         // the pause, tapping to click drags the cursor off whatever it was
         // aimed at during the press.
         aim = .arming
-        source.reengage()
 
         armTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(GestureTiming.tapMaxDuration))
             guard let self, !Task.isCancelled, self.aim == .arming else { return }
 
-            self.aim = .aiming
+            self.aim = .aiming(.pointer)
             // Discard whatever accumulated during the pause, or the rotation
             // made while deciding to hold arrives as a jump the moment the
             // cursor comes alive.
@@ -85,8 +126,14 @@ final class AirMouse: ObservableObject {
         }
     }
 
+    private func applySensitivity() {
+        source.config.sensitivity = target == .scroll ? scrollSensitivity : sensitivity
+    }
+
     func persistSensitivity() {
-        UserDefaults.standard.set(sensitivity, forKey: "airSensitivity")
+        let defaults = UserDefaults.standard
+        defaults.set(sensitivity, forKey: "airSensitivity")
+        defaults.set(scrollSensitivity, forKey: "airScrollSensitivity")
     }
 }
 

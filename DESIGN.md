@@ -101,11 +101,32 @@ Finger count carries the meaning, matching a real trackpad:
 | two finger drag | scroll |
 | two finger tap | right click |
 | three finger tap | middle click |
-| tap, then press and drag | drag with left button held |
+| double tap, released | right click |
+| double tap, held | press left and drag — selection |
 
 Using finger count for right click rather than a double tap removes the delay
 that would otherwise sit on **every** left click: nothing has to wait to find
 out whether a second tap is coming.
+
+Whether the second press of a double tap becomes a selection or a right click
+is decided **by time, not by movement**. A travel-based test would work on the
+trackpad and never fire in Air Mouse mode, where the cursor is driven by
+rotation and the finger does not move at all. The threshold is
+`GestureTiming.tapMaxDuration` again, so the same hold length means the same
+thing everywhere. Movement during the undecided press is withheld and flushed
+only once it resolves into a drag, so a press that turns out to be a click
+never nudges the cursor.
+
+Two consequences of putting right click on the double tap, both real:
+
+- **The first tap still sends its left click.** Suppressing it would mean
+  delaying every left click to see whether a second tap follows, which is the
+  latency the finger-count scheme exists to avoid. Right click therefore arrives
+  preceded by a left click — harmless for opening a context menu, wrong if the
+  first click lands on something that acts immediately.
+- **True double click is no longer expressible.** Two quick taps now read as
+  left then right. Anything needing a double click has to come from the host or
+  from a gesture yet to be assigned.
 
 This has to be built on UIKit touch handling. SwiftUI's `DragGesture` is a
 single-touch abstraction that never reports how many fingers are down, so the
@@ -141,6 +162,13 @@ scroll, taps, and drag keep working exactly as before. Re-engaging resets the
 filter's smoothing state, so motion from before the clutch went down cannot
 arrive as a jump on the first sample after it.
 
+Air Mouse adds a strip down the right edge that points the gyro at the scroll
+wheel instead of the cursor, since two-finger scrolling is awkward while the
+same hand is holding and aiming the phone. It carries its own sensitivity —
+scrolling needs a far gentler response than the pointer — and needs no UIKit
+touch handling of its own, because it only has to know whether a finger is
+resting on it.
+
 Engaging does not start motion immediately. The cursor is held still for
 `GestureTiming.tapMaxDuration`; release inside that window and the gesture was a
 tap, hold past it and the cursor comes alive. Otherwise tapping to click drags
@@ -154,6 +182,9 @@ short to aim also too long to click, so they do nothing at all. Sharing one
 constant makes the two outcomes complementary by construction rather than by
 coincidence. The moment motion begins, the filter is reset a second time — the
 rotation made while deciding to hold would otherwise land as a jump.
+
+The scroll strip takes no such pause. The delay exists only to tell a tap from
+a hold, and the strip has no tap action, so waiting there would be pure latency.
 
 The watch has no touch surface to spare and will need its own answer — holding
 the Digital Crown is the obvious candidate.
