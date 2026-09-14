@@ -41,6 +41,11 @@ your arm. Everything except finger-translation keeps working in that mode, so
 clicks, scroll, and drag are unchanged. Tune the slider rather than rebuilding;
 it persists.
 
+Holding down does not move the cursor straight away. It stays put for a quarter
+second first: let go inside that pause and you get a click with the cursor
+exactly where you aimed, keep holding and it starts tracking. The surface tint
+tells you which of the two you are in.
+
 If scrolling feels inverted, run the host with `-scroll-invert`; `-scroll-gain`
 adjusts its sensitivity. Pointer feel is `cursor.DefaultCurve` in
 `host/internal/cursor/cursor.go`.

@@ -24,7 +24,10 @@ final class TrackpadSurface: UIView {
 
     /// How far the touch may travel and still count as a tap.
     private let tapSlop: CGFloat = 10
-    private let tapMaxDuration: TimeInterval = 0.25
+
+    /// Shared with Air Mouse mode, which waits exactly this long before letting
+    /// rotation move the cursor. See `GestureTiming`.
+    private let tapMaxDuration = GestureTiming.tapMaxDuration
 
     /// Travel required before committing to move-vs-scroll. Fingers rarely land
     /// on the same event, so a brief wait lets a two-finger gesture be seen as
@@ -33,7 +36,7 @@ final class TrackpadSurface: UIView {
 
     /// A tap followed by a press this soon becomes a drag, matching the
     /// trackpad convention of double-tap-and-hold.
-    private let dragArmWindow: TimeInterval = 0.3
+    private let dragArmWindow = GestureTiming.dragArmWindow
 
     private enum Mode { case undecided, moving, scrolling, dragging }
 

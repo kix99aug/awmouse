@@ -9,14 +9,27 @@ import MotionInput
 /// clutch afterwards means redoing the gesture layer.
 @MainActor
 final class AirMouse: ObservableObject {
+    /// What the clutch is currently doing.
+    enum Aim {
+        /// Nothing touching the surface.
+        case idle
+        /// A finger has landed, but the cursor is still held still in case this
+        /// turns out to be a tap.
+        case arming
+        /// Held long enough to be a deliberate hold; rotation now moves the
+        /// cursor.
+        case aiming
+    }
+
     @Published var sensitivity: Double {
         didSet { source.config.sensitivity = sensitivity }
     }
 
-    @Published private(set) var isEngaged = false
+    @Published private(set) var aim: Aim = .idle
 
     private let source = MotionSource()
     private unowned let client: Client
+    private var armTask: Task<Void, Never>?
 
     init(client: Client) {
         self.client = client
@@ -25,7 +38,7 @@ final class AirMouse: ObservableObject {
 
         source.config.sensitivity = sensitivity
         source.onDelta = { [weak self] dx, dy, dt in
-            guard let self, self.isEngaged else { return }
+            guard let self, self.aim == .aiming else { return }
             self.client.move(dx: dx, dy: dy, dt: dt)
         }
     }
@@ -37,17 +50,38 @@ final class AirMouse: ObservableObject {
     }
 
     func deactivate() {
+        armTask?.cancel()
+        armTask = nil
         source.stop()
-        isEngaged = false
+        aim = .idle
     }
 
     func setEngaged(_ engaged: Bool) {
-        guard engaged != isEngaged else { return }
-        isEngaged = engaged
-        if engaged {
-            // Drop smoothing state accumulated while disengaged, so motion from
-            // before the clutch cannot arrive as a jump on the first sample.
-            source.reengage()
+        guard engaged != (aim != .idle) else { return }
+
+        armTask?.cancel()
+        armTask = nil
+
+        guard engaged else {
+            aim = .idle
+            return
+        }
+
+        // Hold the cursor still until this is known not to be a tap. Without
+        // the pause, tapping to click drags the cursor off whatever it was
+        // aimed at during the press.
+        aim = .arming
+        source.reengage()
+
+        armTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(GestureTiming.tapMaxDuration))
+            guard let self, !Task.isCancelled, self.aim == .arming else { return }
+
+            self.aim = .aiming
+            // Discard whatever accumulated during the pause, or the rotation
+            // made while deciding to hold arrives as a jump the moment the
+            // cursor comes alive.
+            self.source.reengage()
         }
     }
 

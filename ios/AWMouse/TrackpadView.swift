@@ -34,19 +34,32 @@ struct TrackpadView: View {
     }
 
     /// Engaging is otherwise invisible in Air Mouse mode — the finger isn't
-    /// moving, so nothing on screen would tell you the clutch is down.
+    /// moving, so nothing on screen would tell you the clutch is down. The
+    /// mid-tone during `arming` is what keeps the pause before motion reading
+    /// as a deliberate wait rather than as lag.
     private var surfaceTint: Color {
-        mode == .airMouse && air.isEngaged
-            ? Color.accentColor.opacity(0.18)
-            : Color(.secondarySystemBackground)
+        guard mode == .airMouse else { return Color(.secondarySystemBackground) }
+        switch air.aim {
+        case .idle: return Color(.secondarySystemBackground)
+        case .arming: return Color.accentColor.opacity(0.08)
+        case .aiming: return Color.accentColor.opacity(0.18)
+        }
     }
 
     private var surfaceLabel: some View {
-        Text(mode == .airMouse
-             ? (air.isEngaged ? "aiming" : "hold to aim")
-             : "trackpad")
+        Text(surfaceText)
             .font(.footnote)
             .foregroundStyle(.tertiary)
+            .animation(.none, value: surfaceText)
+    }
+
+    private var surfaceText: String {
+        guard mode == .airMouse else { return "trackpad" }
+        switch air.aim {
+        case .idle: return "hold to aim"
+        case .arming: return "release to click"
+        case .aiming: return "aiming"
+        }
     }
 
     private var sensitivity: some View {
@@ -71,7 +84,7 @@ struct TrackpadView: View {
         VStack(spacing: 6) {
             Grid(horizontalSpacing: 14, verticalSpacing: 3) {
                 if mode == .airMouse {
-                    row("hold anywhere", "tilt to move")
+                    row("hold anywhere", "aim by tilting")
                 } else {
                     row("one finger drag", "move cursor")
                 }

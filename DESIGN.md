@@ -141,6 +141,20 @@ scroll, taps, and drag keep working exactly as before. Re-engaging resets the
 filter's smoothing state, so motion from before the clutch went down cannot
 arrive as a jump on the first sample after it.
 
+Engaging does not start motion immediately. The cursor is held still for
+`GestureTiming.tapMaxDuration`; release inside that window and the gesture was a
+tap, hold past it and the cursor comes alive. Otherwise tapping to click drags
+the cursor off whatever it was aimed at during the press, which defeats the
+point of aiming.
+
+**That delay must be exactly the tap threshold, not merely close to it.** A
+shorter delay opens a window in which the cursor has already started moving and
+releasing *still* registers as a tap; a longer one makes holds that are too
+short to aim also too long to click, so they do nothing at all. Sharing one
+constant makes the two outcomes complementary by construction rather than by
+coincidence. The moment motion begins, the filter is reset a second time — the
+rotation made while deciding to hold would otherwise land as a jump.
+
 The watch has no touch surface to spare and will need its own answer — holding
 the Digital Crown is the obvious candidate.
 
