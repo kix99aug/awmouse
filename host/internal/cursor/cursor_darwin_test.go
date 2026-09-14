@@ -1,0 +1,65 @@
+//go:build darwin
+
+package cursor
+
+import (
+	"testing"
+	"time"
+
+	"awmouse/host/internal/inject"
+)
+
+// TestMoveMovesRealCursor is the end-to-end check that cgo injection actually
+// reaches the window server. It moves the real cursor, then puts it back.
+func TestMoveMovesRealCursor(t *testing.T) {
+	inj, err := inject.New()
+	if err != nil {
+		t.Skipf("no injector: %v", err)
+	}
+	defer inj.Close()
+
+	startX, startY, ok := inj.Position()
+	if !ok {
+		t.Fatal("cannot read cursor position")
+	}
+	t.Cleanup(func() {
+		_ = inj.MoveTo(startX, startY, 0, 0)
+	})
+
+	ctl := New(inj, DefaultCurve)
+
+	// Move away from wherever we started, so the assertion can't pass by
+	// accident from being clamped against a screen edge.
+	const dx, dy = 120, 80
+	if err := ctl.Move(dx, dy, 16); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	// CGEventPost is asynchronous; give the window server a moment.
+	time.Sleep(100 * time.Millisecond)
+
+	gotX, gotY, _ := inj.Position()
+	if gotX == startX && gotY == startY {
+		t.Fatalf("cursor did not move: still at (%.0f, %.0f)", startX, startY)
+	}
+	t.Logf("cursor moved (%.0f,%.0f) -> (%.0f,%.0f) for delta (%d,%d)",
+		startX, startY, gotX, gotY, dx, dy)
+}
+
+func TestCurveGainRisesWithSpeed(t *testing.T) {
+	c := DefaultCurve
+	gain := func(speed float64) float64 {
+		return clamp(c.Base+c.K*speed, c.Min, c.Max)
+	}
+	slow, fast := gain(60), gain(2500)
+	if !(slow < fast) {
+		t.Fatalf("gain should rise with speed: slow=%.2f fast=%.2f", slow, fast)
+	}
+	if slow < 0.5 || slow > 1.2 {
+		t.Errorf("slow gain %.2f outside the intended precision range", slow)
+	}
+	if fast < 3 || fast > 5 {
+		t.Errorf("fast gain %.2f outside the intended traversal range", fast)
+	}
+	t.Logf("gain: slow(60pt/s)=%.2f  fast(2500pt/s)=%.2f", slow, fast)
+}

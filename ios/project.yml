@@ -1,0 +1,50 @@
+name: AWMouse
+options:
+  bundleIdPrefix: com.awmouse
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  AWMouse:
+    type: application
+    platform: iOS
+    sources:
+      - AWMouse
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.awmouse.AWMouse
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "6.0"
+        # Xcode 26 refuses to resolve a run destination without this; XcodeGen's
+        # `platform: iOS` alone only emits SDKROOT.
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        # A real device is required for meaningful testing: dragging on the
+        # simulator is mouse-driven, which tells you nothing about trackpad feel.
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: AWMouse/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+
+        # iOS 14+ gates LAN connections behind a user prompt. Without this key
+        # the app is killed on first connect rather than merely denied.
+        NSLocalNetworkUsageDescription: >-
+          awmouse connects to the helper running on your computer to move its
+          cursor.
+
+        # The POC transport is plain wss-less ws:// to a private address, which
+        # App Transport Security blocks by default.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+
+        # Lets the QR code deep-link straight into the app from the stock
+        # Camera app, instead of requiring the in-app scanner first.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.awmouse.pair
+            CFBundleURLSchemes:
+              - awmouse

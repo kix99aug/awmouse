@@ -1,0 +1,231 @@
+# awmouse — design
+
+Use an Apple Watch (and iPhone) as a remote mouse for a Mac or Windows PC.
+Move hand → cursor moves. Tap → left click. Double tap → right click.
+
+## Architecture
+
+```
+┌─ Apple Watch ─────────────┐
+│  gyro air-mouse           │
+│  tap / double-tap detect  │
+└────────────┬──────────────┘
+             │ WatchConnectivity
+             ▼
+┌─ iPhone app ──────────────┐
+│  touch trackpad mode      │   ← also an input source, not just a relay
+│  gyro air-mouse mode      │
+│  input arbiter            │   ← exactly one active source at a time
+│  tailcat client           │
+└────────────┬──────────────┘
+             │ tailcat pipe — WireGuard encryption, NAT traversal, DERP fallback
+             ▼
+┌─ Host daemon (Go) ────────┐
+│  tailcat listener         │
+│  accel curve + cursor pos │   ← owns feel, geometry, state
+│  injector (absolute)      │
+│    macOS  → CGEvent       │
+│    Windows→ SendInput     │
+│    Linux  → uinput ABS    │
+└───────────────────────────┘
+```
+
+The watch cannot speak tailcat directly, and the blocker is the Go compiler, not
+gomobile's CLI surface: watchOS binaries must target `arm64_32` (64-bit hardware,
+32-bit types), and Go has no `arm64_32` backend — golang/go#60180 is still open.
+`gomobile bind -target` accordingly offers only ios / iossimulator / macos /
+maccatalyst. There is no flag or workaround; the port does not exist.
+
+The phone relay is therefore structural, not a convenience — which is what makes
+it worth giving the phone its own input modes. See "Standalone watch mode" for
+what it would take to lift this.
+
+## Components
+
+### Shared Swift package (`MotionInput`)
+
+CoreMotion is identical on iOS and watchOS, so the sensor pipeline is written
+once and linked into both targets:
+
+- gyro → cursor delta: `CMDeviceMotion.rotationRate`, exponential moving average,
+  deadzone, nonlinear sensitivity curve, emitted at ~30 Hz
+- tap detection: peak detection on `CMDeviceMotion.userAcceleration` (z-axis
+  spike over threshold) + ~300 ms debounce window to disambiguate single vs.
+  double
+- wire protocol types
+
+Deliberately *not* using the watchOS system Double Tap gesture
+(`.handGestureShortcut`): it requires Series 9 / Ultra 2 or newer, and it hands
+you one fixed action rather than single-vs-double discrimination.
+
+### Engage / clutch
+
+Gyro drifts and picks up incidental arm motion, so the cursor needs an explicit
+live state — hold the Digital Crown, or an on-screen toggle. Without this the
+cursor wanders whenever the user moves their arm for any unrelated reason. This
+is the single easiest thing to skip and the most annoying to retrofit.
+
+### Host daemon
+
+One Go codebase for macOS, Windows, and Linux. Only macOS needs cgo.
+
+```go
+type Injector interface {
+    MoveTo(x, y int32)          // ABSOLUTE, screen coordinates
+    Button(b Button, down bool)
+    Bounds() (w, h int32)
+}
+```
+
+| Platform | API | cgo |
+|---|---|---|
+| macOS | `CGEventCreateMouseEvent` + `CGEventPost` | yes, ~40 lines |
+| Windows | `SendInput`, `MOUSEEVENTF_ABSOLUTE\|MOVE\|VIRTUALDESK` | no (`x/sys/windows`) |
+| Linux | `/dev/uinput` absolute device (`ABS_X`/`ABS_Y`) | no (`bendahl/uinput`) |
+
+Platform notes that will otherwise cost an afternoon each:
+
+- **macOS** requires Accessibility permission to post events. Run from a
+  terminal and the grant attaches to *the terminal app*, not to the binary —
+  this confuses everyone at least once.
+- **macOS** should also populate `kCGMouseEventDeltaX/Y` on the event, or apps
+  that read deltas rather than position (games, 3D viewports) see nothing.
+- **Windows** absolute coordinates are normalized to 0..65535, and
+  `MOUSEEVENTF_VIRTUALDESK` is required for the span to cover all monitors
+  rather than just the primary.
+- **Linux** `uinput` sits *below* the display server, so one code path covers
+  X11, Wayland, and console with no compositor-specific work. The alternative,
+  `libei` + XDG RemoteDesktop portal, is the "blessed" Wayland route but needs
+  cgo, has immature Go bindings, and varies by desktop. The tradeoff is a trust
+  model, not a capability one: `libei` prompts for consent, `uinput` does not.
+- **Linux** needs write access to `/dev/uinput` — a udev rule granting a group,
+  or root. Install-time step.
+
+### Cursor model — absolute injection, host-side acceleration
+
+Each OS applies its own pointer acceleration to relative motion (Linux via the
+compositor, Windows via pointer accel and the "enhance pointer precision"
+toggle), while macOS `CGEvent` is positional and bypasses acceleration entirely.
+Feeding the same delta to all three therefore produces three different feels,
+and macOS would need a hand-written curve regardless.
+
+So the host owns the whole thing:
+
+```
+phone: finger drag → raw unaccelerated deltas (in points) ──wire──▶
+host:  deltas → acceleration curve → accumulate virtual cursor position
+                                   → clamp to screen bounds
+                                   → inject ABSOLUTE position
+```
+
+Consequences:
+
+- Every OS's native acceleration is bypassed. One curve, one feel, three
+  platforms.
+- The phone stays dumb: it never learns screen dimensions, DPI, or monitor
+  layout, and the acceleration curve is never baked into the client. Retuning
+  feel is a host-side change only.
+- The host now holds cursor position as state, which can **desync from the real
+  cursor** if the user also touches a physical mouse. Re-read the OS cursor
+  position at gesture start where possible (`NSEvent.mouseLocation` /
+  `GetCursorPos` / `XQueryPointer`). Wayland deliberately offers no way to query
+  it, so there the drift is simply accepted — tolerable, since someone driving
+  the cursor from a phone is rarely also using a mouse.
+- Multi-monitor geometry becomes the host's problem on all three platforms.
+
+Curve for the POC — keep it simple and tune later:
+`gain = clamp(base + k·speed^p, min, max)`, with `speed = |delta| / dt`.
+
+## Pairing — QR on the computer
+
+The host prints a QR code; the phone scans it once. No IP entry, no firewall
+rules, no account (tailcat needs no Tailscale control plane).
+
+- **Render in the terminal** (`mdp/qrterminal`), not a GUI window — an ASCII QR
+  survives SSH and headless hosts, and can still be drawn into a tray-app window
+  later. A GUI-only QR cannot go the other direction.
+- **Encode a deep link**, not a bare token: `awmouse://pair?t=<token>`. Scanning
+  with the stock iOS Camera app then launches the app directly. In-app scanning
+  via `AVCaptureMetadataOutput` is the fallback, not the primary path.
+- **Scan once, not every launch.** The QR token is a short-lived bootstrap
+  credential. On first successful handshake, each side persists the other's peer
+  identity (iOS Keychain / host config file) and subsequent sessions reconnect
+  silently. If the QR were required every time, the product would be unusable.
+- **Expire the token** (~60 s, regenerate on demand). Whoever scans that QR gets
+  mouse control of the machine, so it should not survive a screenshot or a
+  shoulder-surf.
+- The watch has no camera and never pairs independently — it always inherits the
+  phone's connection.
+
+## Non-goal: standalone watch operation
+
+**The paired iPhone is a hard requirement.** A cellular watch with no phone
+present is explicitly out of scope.
+
+Recorded so this doesn't get re-litigated: the watch *could* network on its own
+(`URLSession` and `Network.framework` both exist on watchOS), but it cannot run
+tailcat, because of the `arm64_32` gap above. Replacing tailcat means replacing
+what it was doing for free — NAT traversal — which means operating a relay, plus
+CryptoKit end-to-end crypto so that relay stays untrusted. That trades away "no
+account, no infrastructure," which is most of why tailcat was chosen. It is also
+the slower path in practice: LTE plus a relay hop beats watch→phone Bluetooth
+(~20–30 ms) only when the phone isn't on the host's LAN.
+
+Consequence: the watch never pairs, never holds keys, and never speaks the wire
+protocol to anything but the phone. Cuts real surface area from v1.
+
+## Wire protocol
+
+JSON. At 30 Hz this is ~1–2 KB/s, so the bandwidth argument for a packed binary
+format doesn't apply, and being able to read the stream during debugging is
+worth more.
+
+```json
+{"t":"m","dx":12,"dy":-4,"dt":33}  // relative, RAW (unaccelerated), dt in ms
+{"t":"c","b":"l","d":true}         // button l|r, down/up
+{"t":"s","dy":3}                   // scroll (reserved)
+```
+
+Deltas on the wire stay **relative and unaccelerated** even though injection is
+absolute — the phone is a trackpad-style surface (drag, lift, drag again to
+continue), so relative is the only correct wire semantics. Absolute belongs at
+the injection layer alone.
+
+`dt` is carried explicitly rather than derived from arrival time: the
+acceleration curve keys off speed, and network jitter would otherwise smear the
+curve. When coalescing moves, sum `dt` along with `dx`/`dy`.
+
+**Moves are lossy, clicks are reliable.** If the pipe backs up, pending move
+deltas must be *coalesced by summing* into a single message rather than queued —
+a backlog of stale deltas makes the cursor rubber-band. Clicks are discrete
+events and must never be dropped or merged. Two different queue disciplines on
+the same channel.
+
+## Build order
+
+Each stage validates the next:
+
+1. **`MotionInput` shared package** — sensor math + protocol types, no I/O.
+2. **iPhone touch-trackpad + host daemon + tailcat pipe + QR pairing** — proves
+   the whole path end to end using the easiest, most reliable input source.
+3. **iPhone gyro air-mouse** — exercises the sensor pipeline without needing
+   WatchConnectivity yet.
+4. **watchOS app** — same shared package, relaying through a phone app that
+   already works.
+
+## Open questions / risks
+
+Roughly in order of how likely they are to hurt:
+
+1. **Tap false positives.** Arm swing during normal movement resembles a tap
+   spike. Needs tuning against recorded sensor traces; a fixed threshold picked
+   by guessing will not hold up.
+2. **Latency budget.** Three hops (watch → phone → host → OS). Each needs to
+   stay lean or the cursor feels laggy. Measure early, on the real path.
+3. **macOS Accessibility permission.** Real first-run UX friction.
+4. **tailcat specifics to verify:** exact Go API surface, token format and byte
+   size (QR capacity is ~2.9 KB alphanumeric, so almost certainly fine, but
+   unconfirmed), and whether `gomobile bind` builds it cleanly for iOS.
+5. **Background execution** on iOS while the phone is pocketed and the watch is
+   driving — may constrain how the relay stays alive.
+```
