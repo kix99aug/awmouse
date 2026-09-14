@@ -5,6 +5,14 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
+# Signing identity lives here rather than in this file so that a personal team
+# ID stays out of git, and outside the generated .xcodeproj so that regenerating
+# cannot wipe it. Run `make` in this directory: it seeds the file from the
+# example if missing, then regenerates.
+configFiles:
+  Debug: Config/Local.xcconfig
+  Release: Config/Local.xcconfig
+
 targets:
   AWMouse:
     type: application

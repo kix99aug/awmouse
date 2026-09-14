@@ -70,9 +70,21 @@ shell it is **your terminal** that must be enabled in System Settings › Privac
 
 ```sh
 cd ios
-xcodegen generate
-open AWMouse.xcodeproj
+make open
 ```
+
+`make` regenerates the project from `project.yml` and opens it. On a fresh
+checkout it also seeds `Config/Local.xcconfig`; put your Apple team ID there to
+build on a device. That file is gitignored and sits outside the `.xcodeproj`
+precisely so regenerating cannot wipe it — otherwise Xcode appears to "forget"
+the team on every generate. Find your team ID with:
+
+```sh
+security find-certificate -a -c "Apple Development" -p | openssl x509 -noout -subject
+```
+
+and take the `OU` field — not the code in the `CN` parentheses, which is the
+certificate ID rather than the team.
 
 Run on a real device. The simulator's drag events come from a mouse, which
 tells you nothing about how the trackpad actually feels — which is the only

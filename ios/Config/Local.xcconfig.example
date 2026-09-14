@@ -1,0 +1,15 @@
+// Copy to Local.xcconfig and fill in your team, then regenerate the project.
+//
+// This lives outside project.yml so that a personal Apple team ID never lands
+// in git, and outside the .xcodeproj so that regenerating cannot wipe it — the
+// reason Xcode kept forgetting the setting.
+//
+// Find yours with:
+//   security find-certificate -a -c "Apple Development" -p \
+//     | openssl x509 -noout -subject
+// and take the OU field — not the code in the CN parentheses, which is the
+// certificate ID rather than the team.
+//
+// Leave it empty to build for the simulator, which needs no signing.
+
+DEVELOPMENT_TEAM =
