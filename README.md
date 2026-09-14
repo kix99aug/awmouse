@@ -37,10 +37,16 @@ conveniences, since two fingers are awkward while one hand holds the phone.
 | double tap | double click |
 | double tap, then hold | press left and drag — selection |
 | tap right strip | right click |
+| double tap right strip | middle click |
 | hold right strip | scroll — by sliding, or by tilting in Air Mouse |
 | two finger drag | scroll |
 | two finger tap | right click |
 | three finger tap | middle click |
+
+Both surfaces reach their screen edge, so a thumb can find either without
+aiming. The strip's right click waits out the double-tap window, since a second
+tap means middle click instead — a delay that is fine on right click and would
+not be on left.
 
 Air Mouse aims by tilting the phone, and only while a finger rests on the
 surface — a gyro with no clutch sends the cursor wandering every time you move

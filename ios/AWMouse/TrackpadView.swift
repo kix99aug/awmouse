@@ -14,16 +14,27 @@ struct TrackpadView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
+            // No horizontal padding: both targets run to their screen edge, so
+            // a thumb can find either without aiming. Only the inner corners
+            // are rounded, since a rounded corner against the screen edge would
+            // just be a gap you can still press.
             HStack(spacing: 8) {
                 Trackpad(client: client, air: air, mode: mode)
                     .background(surfaceTint)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .clipShape(
+                        .rect(
+                            topLeadingRadius: 0,
+                            bottomLeadingRadius: 0,
+                            bottomTrailingRadius: 18,
+                            topTrailingRadius: 18
+                        )
+                    )
                     .overlay(surfaceLabel)
 
                 ScrollStrip(client: client, air: air, mode: mode)
-                    .frame(width: 66)
+                    .frame(width: 72)
             }
-            .padding(12)
+            .padding(.vertical, 12)
 
             if mode == .airMouse {
                 sliders
@@ -102,10 +113,10 @@ struct TrackpadView: View {
                     row("strip held", "scroll by sliding")
                 }
                 row("tap", "left click")
-                row("strip tap", "right click")
                 row("double tap", "double click")
                 row("double tap, hold", "drag to select")
-                row("three finger tap", "middle click")
+                row("strip tap", "right click")
+                row("strip double tap", "middle click")
             }
             .font(.caption2)
 
@@ -134,84 +145,48 @@ struct TrackpadView: View {
     }
 }
 
-/// The right-edge strip: tap for a right click, hold to scroll.
+/// The right-edge strip: tap for right click, double tap for middle click,
+/// hold to scroll.
 ///
-/// Both live here so that the whole gesture set is reachable with one finger.
-/// Two-finger scrolling and two-finger right click still work, but they are
-/// awkward when the same hand is holding the phone, so neither is required.
-///
-/// Only needs to know whether a finger rests on it and roughly how far it has
-/// moved — no finger count — so a plain SwiftUI gesture suffices, unlike the
-/// main surface which has to drop to UIKit.
-private struct ScrollStrip: View {
+/// All three live here so the whole gesture set is reachable with one finger.
+/// The multi-finger equivalents still work, but they are awkward when the same
+/// hand is holding the phone, so none of them is required.
+private struct ScrollStrip: UIViewRepresentable {
     let client: Client
     let air: AirMouse
     let mode: InputMode
 
-    @State private var startedAt: Date?
-    @State private var lastY: CGFloat = 0
-    @State private var travelled: CGFloat = 0
-    @State private var pending: CGFloat = 0
+    func makeUIView(context: Context) -> StripSurface {
+        let surface = StripSurface()
+        surface.backgroundColor = .secondarySystemBackground
+        surface.layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner]
+        surface.layer.cornerRadius = 18
 
-    /// Matches the main surface: a touch that travels less than this and is
-    /// released quickly is a tap.
-    private let tapSlop: CGFloat = 10
+        surface.onScroll = { dx, dy in client.scroll(dx: dx, dy: dy) }
+        surface.onTap = { client.click(.right) }
+        surface.onDoubleTap = { client.click(.middle) }
+        surface.onEngageChanged = { engaged in
+            surface.backgroundColor = engaged
+                ? UIColor.tintColor.withAlphaComponent(0.18)
+                : .secondarySystemBackground
+            air.setEngaged(engaged, target: .scroll)
+        }
 
-    private var engaged: Bool { startedAt != nil }
+        let label = UIImageView(image: UIImage(systemName: "arrow.up.arrow.down"))
+        label.tintColor = .tertiaryLabel
+        label.translatesAutoresizingMaskIntoConstraints = false
+        surface.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: surface.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: surface.centerYAnchor),
+        ])
 
-    var body: some View {
-        RoundedRectangle(cornerRadius: 18)
-            .fill(engaged ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground))
-            .overlay(
-                Image(systemName: "arrow.up.arrow.down")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-            )
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged(handleChange)
-                    .onEnded(handleEnd)
-            )
+        surface.emitsTouchScroll = mode == .trackpad
+        return surface
     }
 
-    private func handleChange(_ value: DragGesture.Value) {
-        if startedAt == nil {
-            startedAt = Date()
-            travelled = 0
-            pending = 0
-            lastY = value.location.y
-            if mode == .airMouse {
-                air.setEngaged(true, target: .scroll)
-            }
-        }
-
-        let dy = value.location.y - lastY
-        lastY = value.location.y
-        travelled += abs(dy)
-
-        // Air Mouse scrolls by tilting, so finger travel here is only used to
-        // tell a tap from a hold.
-        guard mode == .trackpad else { return }
-
-        // Withhold scrolling while the touch could still turn out to be a tap,
-        // or a right click would scroll the page slightly on its way out.
-        pending += dy
-        guard travelled >= tapSlop else { return }
-        client.scroll(dx: 0, dy: pending)
-        pending = 0
-    }
-
-    private func handleEnd(_ value: DragGesture.Value) {
-        let duration = Date().timeIntervalSince(startedAt ?? Date())
-        if mode == .airMouse {
-            air.setEngaged(false)
-        }
-        if travelled < tapSlop && duration < GestureTiming.tapMaxDuration {
-            client.click(.right)
-        }
-        startedAt = nil
-        pending = 0
+    func updateUIView(_ uiView: StripSurface, context: Context) {
+        uiView.emitsTouchScroll = mode == .trackpad
     }
 }
 

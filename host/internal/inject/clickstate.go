@@ -29,8 +29,15 @@ type clickSequence struct {
 }
 
 // next reports the click count for a press at the given place and moment.
+//
+// Only the left button accumulates. Double click has a defined meaning there
+// and nowhere else, and a right click arriving with a count of two makes some
+// applications reopen or flicker their context menu. The gesture set has no way
+// to ask for one in any case: a double tap on the strip sends a single middle
+// click rather than two right clicks.
 func (s *clickSequence) next(b Button, x, y float64, now time.Time) int64 {
-	continues := s.count > 0 &&
+	continues := b == ButtonLeft &&
+		s.count > 0 &&
 		s.button == b &&
 		now.Sub(s.at) <= doubleClickInterval &&
 		abs(x-s.x) <= doubleClickSlop &&

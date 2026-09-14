@@ -69,6 +69,20 @@ func TestPressesFarApartAreSeparateClicks(t *testing.T) {
 	}
 }
 
+// Double click means something only for the left button. A right click
+// carrying a count of two makes some applications reopen or flicker their
+// context menu.
+func TestOnlyTheLeftButtonAccumulates(t *testing.T) {
+	for _, b := range []Button{ButtonRight, ButtonMiddle} {
+		var s clickSequence
+		s.next(b, 100, 100, origin)
+		second := s.next(b, 100, 100, origin.Add(80*time.Millisecond))
+		if second != 1 {
+			t.Errorf("button %v: got %d, want 1", b, second)
+		}
+	}
+}
+
 // A left click followed by a right click is not a double click of either.
 func TestDifferentButtonsDoNotAccumulate(t *testing.T) {
 	var s clickSequence

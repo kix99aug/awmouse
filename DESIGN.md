@@ -105,10 +105,22 @@ conveniences rather than as the only route to anything.
 | double tap | double click |
 | double tap, then hold | press left and drag — selection |
 | tap right strip | right click |
+| double tap right strip | middle click |
 | hold right strip | scroll — by sliding, or by tilting in Air Mouse |
 | two finger drag | scroll (convenience) |
 | two finger tap | right click (convenience) |
-| three finger tap | middle click |
+| three finger tap | middle click (convenience) |
+
+Both surfaces run to their screen edge with no outer padding, and only their
+inner corners are rounded. A rounded corner against the edge of the display is
+just a gap that still accepts touches, and an edge target is the easiest thing
+on a screen to hit without looking.
+
+**The strip carries the double-tap delay that the main surface refuses.** Its
+tap waits out the double-tap window before firing a right click, because a
+second tap would make it a middle click instead. That is the same wait-and-see
+latency rejected for left click — and it is fine here for the same reason it
+was not there: right click is rare, left click is constant.
 
 Right click lives on the strip rather than on a double tap, and the reason is
 worth keeping: a double tap that meant right click would still have sent its
@@ -131,10 +143,15 @@ nudges the cursor.
 The host, not the phone, decides that two taps are a double click — see
 [Click sequences](#click-sequences).
 
-This has to be built on UIKit touch handling. SwiftUI's `DragGesture` is a
+Both surfaces are built on UIKit touch handling. SwiftUI's `DragGesture` is a
 single-touch abstraction that never reports how many fingers are down, so the
-surface is effectively a small trackpad driver. Three details in it are not
-optional:
+main surface is effectively a small trackpad driver. The strip needs no finger
+count, but a `DragGesture` proved wrong there too: a tap that never moves may
+produce no change callback at all, leaving gesture state to be inferred from
+whatever the previous gesture left behind, which is how a tap ends up emitting
+the wrong click. Raw touch events report press and release unconditionally.
+
+Three details in the main surface are not optional:
 
 - `isMultipleTouchEnabled` must be set, or every multi-finger gesture silently
   degrades to one finger.
@@ -239,6 +256,10 @@ A sequence continues only while the presses share a button, fall inside the
 double-click interval, and stay within a few points of each other. The release
 repeats whatever count its press carried, or an application would see a double
 click begin and a single click end.
+
+Only the left button accumulates. Double click has a defined meaning there and
+nowhere else, and a right click arriving with a count of two makes some
+applications reopen or flicker their context menu.
 
 ### Cursor model — absolute injection, host-side acceleration
 
