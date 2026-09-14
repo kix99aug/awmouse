@@ -12,6 +12,16 @@ final class TrackpadSurface: UIView {
     var onButton: ((MouseButton, Bool) -> Void)?
     var onClick: ((MouseButton) -> Void)?
 
+    /// Fires when the surface goes from untouched to touched and back. Air
+    /// Mouse mode uses it as the clutch: rotation drives the cursor only while
+    /// a finger rests here.
+    var onEngageChanged: ((Bool) -> Void)?
+
+    /// When false, finger translation no longer moves the cursor — Air Mouse
+    /// mode takes that over. Scrolling, taps, and drag still come from touch,
+    /// so the rest of the gesture set is unaffected.
+    var emitsTouchMotion = true
+
     /// How far the touch may travel and still count as a tap.
     private let tapSlop: CGFloat = 10
     private let tapMaxDuration: TimeInterval = 0.25
@@ -53,6 +63,7 @@ final class TrackpadSurface: UIView {
         active.formUnion(touches)
 
         if starting {
+            onEngageChanged?(true)
             startedAt = Date()
             lastSampleAt = startedAt
             travelled = 0
@@ -152,6 +163,7 @@ final class TrackpadSurface: UIView {
         case .scrolling:
             onScroll?(Double(dx), Double(dy))
         case .moving, .dragging:
+            guard emitsTouchMotion else { return }
             onMove?(Double(dx), Double(dy), dt)
         case .undecided:
             break
@@ -171,10 +183,14 @@ final class TrackpadSurface: UIView {
         return CGPoint(x: sx / n, y: sy / n)
     }
 
+    /// Ends the touch sequence. Reached from both `touchesEnded` and
+    /// `touchesCancelled`, and only once the last finger has lifted, so the
+    /// disengage notification belongs here rather than in each caller.
     private func reset() {
         mode = .undecided
         maxFingers = 0
         travelled = 0
         pending = .zero
+        onEngageChanged?(false)
     }
 }

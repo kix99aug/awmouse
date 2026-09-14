@@ -15,6 +15,8 @@ working on device.
 | macOS injection (`CGEvent`, absolute) | working |
 | Acceleration curve + cursor state | working, untuned |
 | iPhone trackpad, full gesture set | working |
+| iPhone air mouse (gyro) | builds, needs on-device testing |
+| Shared `MotionInput` package | working, unit tested |
 | LAN WebSocket transport | working |
 | QR pairing | host renders it; in-app scanner not built (manual entry works) |
 | tailcat transport | not started — deliberately after the input pipeline |
@@ -25,12 +27,19 @@ working on device.
 
 | Gesture | Action |
 |---|---|
-| one finger drag | move cursor |
+| one finger drag | move cursor (Trackpad mode) |
+| one finger held | engage the gyro (Air Mouse mode) |
 | one finger tap | left click |
 | two finger drag | scroll |
 | two finger tap | right click |
 | three finger tap | middle click |
 | tap, then press and drag | drag with left button held |
+
+Air Mouse aims by tilting the phone, and only while a finger rests on the
+surface — a gyro with no clutch sends the cursor wandering every time you move
+your arm. Everything except finger-translation keeps working in that mode, so
+clicks, scroll, and drag are unchanged. Tune the slider rather than rebuilding;
+it persists.
 
 If scrolling feels inverted, run the host with `-scroll-invert`; `-scroll-gain`
 adjusts its sensitivity. Pointer feel is `cursor.DefaultCurve` in
@@ -45,6 +54,7 @@ host/                       Go daemon
   internal/inject/          absolute cursor injection, per-OS
   internal/cursor/          acceleration curve + position state
   internal/transport/       Transport interface; WebSocket impl (tailcat swaps in here)
+shared/MotionInput/         Swift package — gyro filtering, shared with watchOS later
 ios/
   project.yml               XcodeGen source of truth — edit this, not the .xcodeproj
   AWMouse/                  SwiftUI client
@@ -98,7 +108,12 @@ restriction disappears once tailcat replaces this transport.
 
 ```sh
 cd host && go test ./...
+cd shared/MotionInput && swift test
 ```
 
 `TestMoveMovesRealCursor` moves your actual cursor and puts it back — it is the
 only honest way to check that cgo injection reaches the window server.
+
+The `MotionInput` tests are pure math and need no device. The one that matters
+most is `stillnessProducesNoDrift`: a cursor that wanders while the phone is
+held still is the defining failure of an air mouse.

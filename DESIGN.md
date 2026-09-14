@@ -47,12 +47,33 @@ what it would take to lift this.
 CoreMotion is identical on iOS and watchOS, so the sensor pipeline is written
 once and linked into both targets:
 
-- gyro → cursor delta: `CMDeviceMotion.rotationRate`, exponential moving average,
-  deadzone, nonlinear sensitivity curve, emitted at ~30 Hz
-- tap detection: peak detection on `CMDeviceMotion.userAcceleration` (z-axis
-  spike over threshold) + ~300 ms debounce window to disambiguate single vs.
-  double
-- wire protocol types
+- `PointerFilter` — rotation rate → pointer delta. Pure math with no CoreMotion
+  import, so the part that decides how an air mouse *feels* can be unit tested
+  rather than only evaluated by waving a phone around.
+- `MotionSource` — the CoreMotion wrapper that feeds it.
+- tap detection (watch only, not yet built): peak detection on
+  `CMDeviceMotion.userAcceleration` + ~300 ms debounce to disambiguate single
+  from double.
+
+Three decisions inside the filter, each of which is felt in the hand:
+
+- **Scale by angle, not by rate.** Multiplying by `dt` makes the output points
+  per radian turned, so the feel doesn't change when the sensor delivers samples
+  at a different rate.
+- **Subtractive deadzone, not a hard cut.** A hard threshold makes the cursor
+  leap the instant it is crossed, because output jumps from zero straight to the
+  full threshold value.
+- **Smooth before gating.** Averaging the noise down first means the deadzone
+  only has to reject what survives, rather than being wide enough to swallow raw
+  jitter.
+
+Use `CMDeviceMotion.rotationRate`, never `CMMotionManager.gyroData.rotationRate`
+— the former is bias-corrected by CoreMotion's fusion, the latter is raw and its
+bias walks the cursor across the screen while the device sits still.
+
+An earlier draft of this document also put the wire protocol types here. That
+was wrong: the watch talks to the phone over WatchConnectivity and never encodes
+the JSON the host consumes, so sharing `Msg` would buy nothing.
 
 Deliberately *not* using the watchOS system Double Tap gesture
 (`.handGestureShortcut`): it requires Series 9 / Ultra 2 or newer, and it hands
@@ -97,10 +118,20 @@ phone now avoids. See [Shared Swift package](#shared-swift-package-motioninput).
 
 ### Engage / clutch
 
-Gyro drifts and picks up incidental arm motion, so the cursor needs an explicit
-live state — hold the Digital Crown, or an on-screen toggle. Without this the
-cursor wanders whenever the user moves their arm for any unrelated reason. This
+Gyro picks up every incidental arm movement, so the cursor needs an explicit
+live state. Without one it wanders whenever the device is merely carried. This
 is the single easiest thing to skip and the most annoying to retrofit.
+
+On the phone the clutch is **a finger resting on the surface**: rotation drives
+the cursor only while something is touching. This costs nothing to build,
+because the touch surface already exists, and it leaves the rest of the gesture
+set intact — only finger *translation* is suspended in Air Mouse mode, so
+scroll, taps, and drag keep working exactly as before. Re-engaging resets the
+filter's smoothing state, so motion from before the clutch went down cannot
+arrive as a jump on the first sample after it.
+
+The watch has no touch surface to spare and will need its own answer — holding
+the Digital Crown is the obvious candidate.
 
 ### Host daemon
 

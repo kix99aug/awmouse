@@ -2,33 +2,91 @@ import SwiftUI
 
 struct TrackpadView: View {
     @EnvironmentObject private var client: Client
+    @EnvironmentObject private var air: AirMouse
+    @State private var mode: InputMode = .trackpad
 
     var body: some View {
         VStack(spacing: 0) {
-            Trackpad(client: client)
-                .background(Color(.secondarySystemBackground))
+            Picker("Mode", selection: $mode) {
+                ForEach(InputMode.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+
+            Trackpad(client: client, air: air, mode: mode)
+                .background(surfaceTint)
                 .clipShape(RoundedRectangle(cornerRadius: 18))
-                .overlay(
-                    Text("trackpad")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                )
+                .overlay(surfaceLabel)
                 .padding(12)
+
+            if mode == .airMouse {
+                sensitivity
+            }
 
             legend
         }
         .background(Color(.systemBackground))
+        .onChange(of: mode) { _, newMode in
+            newMode == .airMouse ? air.activate() : air.deactivate()
+        }
+        .onDisappear { air.deactivate() }
+    }
+
+    /// Engaging is otherwise invisible in Air Mouse mode — the finger isn't
+    /// moving, so nothing on screen would tell you the clutch is down.
+    private var surfaceTint: Color {
+        mode == .airMouse && air.isEngaged
+            ? Color.accentColor.opacity(0.18)
+            : Color(.secondarySystemBackground)
+    }
+
+    private var surfaceLabel: some View {
+        Text(mode == .airMouse
+             ? (air.isEngaged ? "aiming" : "hold to aim")
+             : "trackpad")
+            .font(.footnote)
+            .foregroundStyle(.tertiary)
+    }
+
+    private var sensitivity: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "tortoise.fill")
+            Slider(
+                value: $air.sensitivity,
+                in: 500...8000,
+                onEditingChanged: { editing in
+                    if !editing { air.persistSensitivity() }
+                }
+            )
+            Image(systemName: "hare.fill")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 6)
     }
 
     private var legend: some View {
         VStack(spacing: 6) {
             Grid(horizontalSpacing: 14, verticalSpacing: 3) {
-                row("one finger", "move · tap to click")
+                if mode == .airMouse {
+                    row("hold anywhere", "tilt to move")
+                } else {
+                    row("one finger drag", "move cursor")
+                }
+                row("one finger tap", "left click")
                 row("two fingers", "scroll · tap for right click")
                 row("three fingers", "middle click")
                 row("tap then hold", "drag")
             }
             .font(.caption2)
+
+            if mode == .airMouse && !air.isAvailable {
+                Text("no motion sensor here — run on a device")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
 
             Button("Disconnect") { client.disconnect() }
                 .font(.caption)
@@ -54,6 +112,8 @@ struct TrackpadView: View {
 /// count.
 private struct Trackpad: UIViewRepresentable {
     let client: Client
+    let air: AirMouse
+    let mode: InputMode
 
     func makeUIView(context: Context) -> TrackpadSurface {
         let surface = TrackpadSurface()
@@ -61,8 +121,12 @@ private struct Trackpad: UIViewRepresentable {
         surface.onScroll = { dx, dy in client.scroll(dx: dx, dy: dy) }
         surface.onButton = { button, down in client.button(button, down: down) }
         surface.onClick = { button in client.click(button) }
+        surface.onEngageChanged = { engaged in air.setEngaged(engaged) }
+        surface.emitsTouchMotion = mode == .trackpad
         return surface
     }
 
-    func updateUIView(_ uiView: TrackpadSurface, context: Context) {}
+    func updateUIView(_ uiView: TrackpadSurface, context: Context) {
+        uiView.emitsTouchMotion = mode == .trackpad
+    }
 }

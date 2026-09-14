@@ -13,12 +13,18 @@ configFiles:
   Debug: Config/Local.xcconfig
   Release: Config/Local.xcconfig
 
+packages:
+  MotionInput:
+    path: ../shared/MotionInput
+
 targets:
   AWMouse:
     type: application
     platform: iOS
     sources:
       - AWMouse
+    dependencies:
+      - package: MotionInput
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.awmouse.AWMouse

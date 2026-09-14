@@ -11,3 +11,7 @@ host/awmoused
 
 # Personal signing identity — see ios/Config/Local.xcconfig.example
 ios/Config/Local.xcconfig
+
+# SwiftPM
+.build/
+.swiftpm/

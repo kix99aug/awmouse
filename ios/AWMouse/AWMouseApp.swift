@@ -2,12 +2,20 @@ import SwiftUI
 
 @main
 struct AWMouseApp: App {
-    @StateObject private var client = Client()
+    @StateObject private var client: Client
+    @StateObject private var air: AirMouse
+
+    init() {
+        let client = Client()
+        _client = StateObject(wrappedValue: client)
+        _air = StateObject(wrappedValue: AirMouse(client: client))
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(client)
+                .environmentObject(air)
                 .onOpenURL(perform: handlePairingLink)
         }
     }
