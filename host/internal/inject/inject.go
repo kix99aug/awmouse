@@ -6,6 +6,21 @@
 // cursor directly puts the curve under our control. See DESIGN.md.
 package inject
 
+import "errors"
+
+// ErrNotTrusted means the process lacks the OS permission needed to post input.
+// Only macOS returns it today, but it is declared here so that callers can test
+// for it without build tags.
+//
+// On macOS the Accessibility grant attaches to the binary that owns the
+// process — so when running from a terminal it is the *terminal app* (Terminal,
+// iTerm) that must be listed in System Settings › Privacy & Security ›
+// Accessibility, not this binary. This catches everyone at least once.
+var ErrNotTrusted = errors.New(
+	"not trusted for Accessibility: grant the app running this binary " +
+		"(your terminal, if launched from a shell) access in " +
+		"System Settings > Privacy & Security > Accessibility")
+
 type Button int
 
 const (

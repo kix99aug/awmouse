@@ -232,6 +232,18 @@ Platform notes that will otherwise cost an afternoon each:
 - **Windows** absolute coordinates are normalized to 0..65535, and
   `MOUSEEVENTF_VIRTUALDESK` is required for the span to cover all monitors
   rather than just the primary.
+- **Windows** must declare DPI awareness (`SetProcessDpiAwarenessContext`,
+  per-monitor V2) before touching geometry. A process that doesn't is handed
+  virtualised, scaled coordinates on high-DPI displays: `GetSystemMetrics` and
+  `GetCursorPos` disagree with where the cursor actually lands, and absolute
+  positioning drifts by the scale factor.
+- **Windows** `SendInput` compares `cbSize` against its own `sizeof(INPUT)` and
+  injects *nothing* on a mismatch — no error, no event. The Go structs that
+  mirror `INPUT`/`MOUSEINPUT` therefore carry a compile-time size assertion, so
+  a layout slip fails the build instead of failing silently at runtime.
+- **Windows** needs no click-count tracking and no drag-vs-move distinction:
+  the OS derives double clicks from press timing itself, and a move while a
+  button is held is already a drag.
 - **Linux** `uinput` sits *below* the display server, so one code path covers
   X11, Wayland, and console with no compositor-specific work. The alternative,
   `libei` + XDG RemoteDesktop portal, is the "blessed" Wayland route but needs

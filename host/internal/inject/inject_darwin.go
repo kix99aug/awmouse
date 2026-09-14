@@ -93,22 +93,7 @@ static int trusted(void) { return AXIsProcessTrusted() ? 1 : 0; }
 */
 import "C"
 
-import (
-	"errors"
-	"time"
-)
-
-// ErrNotTrusted means the process lacks Accessibility permission, without which
-// CGEventPost silently does nothing.
-//
-// The grant attaches to the binary that owns the process — so when running from
-// a terminal it is the *terminal app* (Terminal, iTerm) that must be listed in
-// System Settings › Privacy & Security › Accessibility, not this binary. This
-// catches everyone at least once.
-var ErrNotTrusted = errors.New(
-	"not trusted for Accessibility: grant the app running this binary " +
-		"(your terminal, if launched from a shell) access in " +
-		"System Settings > Privacy & Security > Accessibility")
+import "time"
 
 type darwinInjector struct {
 	// held tracks which buttons are down, so that motion during a drag is

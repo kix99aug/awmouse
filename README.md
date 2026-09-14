@@ -20,7 +20,8 @@ working on device.
 | LAN WebSocket transport | working |
 | QR pairing | host renders it; in-app scanner not built (manual entry works) |
 | tailcat transport | not started — deliberately after the input pipeline |
-| Windows / Linux injection | not started |
+| Windows injection (`SendInput`, absolute) | builds, needs on-device testing |
+| Linux injection (`uinput`) | not started |
 | watchOS app | not started |
 
 ## Gestures
@@ -97,6 +98,18 @@ macOS needs Accessibility permission, or `CGEventPost` silently does nothing.
 The grant attaches to the app that owns the process, so when running from a
 shell it is **your terminal** that must be enabled in System Settings › Privacy
 & Security › Accessibility — not the `awmoused` binary.
+
+**Windows** needs no permission. Build on the machine, or cross-compile from
+anywhere:
+
+```sh
+GOOS=windows GOARCH=amd64 go build -o awmoused.exe ./cmd/awmoused
+```
+
+Run it from Windows Terminal or PowerShell 7 — the QR code uses Unicode block
+characters that the legacy console may not draw. If the cursor lands at a
+scaled-down position on a high-DPI display, or cannot reach a second monitor,
+that is the DPI-awareness or `VIRTUALDESK` handling and worth reporting.
 
 **iOS:**
 
