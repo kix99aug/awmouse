@@ -27,7 +27,7 @@ static void moveTo(double x, double y, double dx, double dy, int held) {
 }
 
 // which: 0 left, 1 right, 2 middle
-static void button(double x, double y, int which, int down) {
+static void button(double x, double y, int which, int down, long long clickState) {
 	CGEventType t;
 	CGMouseButton b;
 	switch (which) {
@@ -47,7 +47,10 @@ static void button(double x, double y, int which, int down) {
 
 	CGEventRef e = CGEventCreateMouseEvent(NULL, t, CGPointMake(x, y), b);
 	if (e == NULL) return;
-	CGEventSetIntegerValueField(e, kCGMouseEventClickState, 1);
+	// Without a rising click state, two quick presses are two single clicks:
+	// macOS reads the count from the event rather than timing it itself, so
+	// double click would never reach any application.
+	CGEventSetIntegerValueField(e, kCGMouseEventClickState, clickState);
 	CGEventPost(kCGHIDEventTap, e);
 	CFRelease(e);
 }
@@ -90,7 +93,10 @@ static int trusted(void) { return AXIsProcessTrusted() ? 1 : 0; }
 */
 import "C"
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // ErrNotTrusted means the process lacks Accessibility permission, without which
 // CGEventPost silently does nothing.
@@ -109,6 +115,8 @@ type darwinInjector struct {
 	// emitted as a drag event rather than a plain move. Apps that implement
 	// text selection or window dragging listen only for the former.
 	held map[Button]bool
+
+	clicks clickSequence
 }
 
 // New returns an Injector for the current platform.
@@ -155,7 +163,14 @@ func (d *darwinInjector) Button(b Button, down bool) error {
 		dn = 1
 	}
 
-	C.button(C.double(x), C.double(y), C.int(which), C.int(dn))
+	// The press decides the count; the release repeats it, so that both halves
+	// of one click agree.
+	clickState := d.clicks.current()
+	if down {
+		clickState = d.clicks.next(b, x, y, time.Now())
+	}
+
+	C.button(C.double(x), C.double(y), C.int(which), C.int(dn), C.longlong(clickState))
 
 	if down {
 		d.held[b] = true

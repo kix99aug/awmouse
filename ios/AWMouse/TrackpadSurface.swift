@@ -43,7 +43,8 @@ final class TrackpadSurface: UIView {
         case moving
         case scrolling
         /// The second press of a double tap, before it is known whether it will
-        /// be held (a selection drag) or released (a right click).
+        /// be held (a selection drag) or released (the second click of a
+        /// double click).
         case dragPending
         case dragging
     }
@@ -151,9 +152,10 @@ final class TrackpadSurface: UIView {
             onButton?(.left, false)
 
         case .dragPending:
-            // Released before the hold completed, so the double tap was not the
-            // start of a selection.
-            onClick?(.right)
+            // Released before the hold completed, so this was the second tap of
+            // a plain double tap. Sending its own left click is what makes the
+            // pair read as a double click on the host, which counts them.
+            onClick?(.left)
 
         default:
             if travelled < tapSlop && duration < tapMaxDuration {

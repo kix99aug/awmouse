@@ -101,27 +101,20 @@ final class AirMouse: ObservableObject {
         applySensitivity()
         source.reengage()
 
-        // The pause exists only to tell a tap from a hold. The scroll strip has
-        // no tap action, so there is no ambiguity to resolve and waiting would
-        // be pure latency.
-        guard target == .pointer else {
-            aim = .aiming(.scroll)
-            return
-        }
-
-        // Hold the cursor still until this is known not to be a tap. Without
-        // the pause, tapping to click drags the cursor off whatever it was
-        // aimed at during the press.
+        // Stay still until this is known not to be a tap. Both surfaces now
+        // have a tap action — the pointer surface clicks, the strip right
+        // clicks — so a press that turns out to be a tap must not have moved
+        // anything first.
         aim = .arming
 
         armTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(GestureTiming.tapMaxDuration))
             guard let self, !Task.isCancelled, self.aim == .arming else { return }
 
-            self.aim = .aiming(.pointer)
+            self.aim = .aiming(target)
             // Discard whatever accumulated during the pause, or the rotation
-            // made while deciding to hold arrives as a jump the moment the
-            // cursor comes alive.
+            // made while deciding to hold arrives as a jump the moment motion
+            // comes alive.
             self.source.reengage()
         }
     }

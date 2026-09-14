@@ -20,10 +20,8 @@ struct TrackpadView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18))
                     .overlay(surfaceLabel)
 
-                if mode == .airMouse {
-                    ScrollStrip(air: air)
-                        .frame(width: 66)
-                }
+                ScrollStrip(client: client, air: air, mode: mode)
+                    .frame(width: 66)
             }
             .padding(12)
 
@@ -97,16 +95,17 @@ struct TrackpadView: View {
         VStack(spacing: 6) {
             Grid(horizontalSpacing: 14, verticalSpacing: 3) {
                 if mode == .airMouse {
-                    row("hold anywhere", "aim by tilting")
-                    row("hold right edge", "scroll by tilting")
+                    row("hold", "aim by tilting")
+                    row("strip held", "scroll by tilting")
                 } else {
-                    row("one finger drag", "move cursor")
+                    row("drag", "move cursor")
+                    row("strip held", "scroll by sliding")
                 }
-                row("one finger tap", "left click")
-                row("two fingers", "scroll · tap for right click")
-                row("three fingers", "middle click")
-                row("double tap", "right click")
+                row("tap", "left click")
+                row("strip tap", "right click")
+                row("double tap", "double click")
                 row("double tap, hold", "drag to select")
+                row("three finger tap", "middle click")
             }
             .font(.caption2)
 
@@ -135,19 +134,34 @@ struct TrackpadView: View {
     }
 }
 
-/// A dedicated strip that points the gyro at the scroll wheel instead of the
-/// cursor.
+/// The right-edge strip: tap for a right click, hold to scroll.
 ///
-/// Only needs to know whether a finger is resting on it, with no finger count
-/// or tap discrimination, so a plain SwiftUI gesture is enough here — unlike
-/// the main surface, which has to drop to UIKit.
+/// Both live here so that the whole gesture set is reachable with one finger.
+/// Two-finger scrolling and two-finger right click still work, but they are
+/// awkward when the same hand is holding the phone, so neither is required.
+///
+/// Only needs to know whether a finger rests on it and roughly how far it has
+/// moved — no finger count — so a plain SwiftUI gesture suffices, unlike the
+/// main surface which has to drop to UIKit.
 private struct ScrollStrip: View {
-    @ObservedObject var air: AirMouse
-    @State private var held = false
+    let client: Client
+    let air: AirMouse
+    let mode: InputMode
+
+    @State private var startedAt: Date?
+    @State private var lastY: CGFloat = 0
+    @State private var travelled: CGFloat = 0
+    @State private var pending: CGFloat = 0
+
+    /// Matches the main surface: a touch that travels less than this and is
+    /// released quickly is a tap.
+    private let tapSlop: CGFloat = 10
+
+    private var engaged: Bool { startedAt != nil }
 
     var body: some View {
         RoundedRectangle(cornerRadius: 18)
-            .fill(held ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground))
+            .fill(engaged ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground))
             .overlay(
                 Image(systemName: "arrow.up.arrow.down")
                     .font(.footnote)
@@ -156,18 +170,48 @@ private struct ScrollStrip: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        // onChanged repeats for every movement; engaging is a
-                        // one-shot.
-                        guard !held else { return }
-                        held = true
-                        air.setEngaged(true, target: .scroll)
-                    }
-                    .onEnded { _ in
-                        held = false
-                        air.setEngaged(false)
-                    }
+                    .onChanged(handleChange)
+                    .onEnded(handleEnd)
             )
+    }
+
+    private func handleChange(_ value: DragGesture.Value) {
+        if startedAt == nil {
+            startedAt = Date()
+            travelled = 0
+            pending = 0
+            lastY = value.location.y
+            if mode == .airMouse {
+                air.setEngaged(true, target: .scroll)
+            }
+        }
+
+        let dy = value.location.y - lastY
+        lastY = value.location.y
+        travelled += abs(dy)
+
+        // Air Mouse scrolls by tilting, so finger travel here is only used to
+        // tell a tap from a hold.
+        guard mode == .trackpad else { return }
+
+        // Withhold scrolling while the touch could still turn out to be a tap,
+        // or a right click would scroll the page slightly on its way out.
+        pending += dy
+        guard travelled >= tapSlop else { return }
+        client.scroll(dx: 0, dy: pending)
+        pending = 0
+    }
+
+    private func handleEnd(_ value: DragGesture.Value) {
+        let duration = Date().timeIntervalSince(startedAt ?? Date())
+        if mode == .airMouse {
+            air.setEngaged(false)
+        }
+        if travelled < tapSlop && duration < GestureTiming.tapMaxDuration {
+            client.click(.right)
+        }
+        startedAt = nil
+        pending = 0
     }
 }
 

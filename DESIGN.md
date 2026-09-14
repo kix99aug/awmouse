@@ -94,39 +94,42 @@ you one fixed action rather than single-vs-double discrimination.
 
 Finger count carries the meaning, matching a real trackpad:
 
+**Everything common is reachable with one finger.** Holding the phone in one
+hand makes two-finger gestures awkward, so multi-finger variants are kept as
+conveniences rather than as the only route to anything.
+
 | Gesture | Action |
 |---|---|
-| one finger drag | move cursor |
-| one finger tap | left click |
-| two finger drag | scroll |
-| two finger tap | right click |
+| drag on main surface | move cursor (Air Mouse: hold and tilt) |
+| tap main surface | left click |
+| double tap | double click |
+| double tap, then hold | press left and drag — selection |
+| tap right strip | right click |
+| hold right strip | scroll — by sliding, or by tilting in Air Mouse |
+| two finger drag | scroll (convenience) |
+| two finger tap | right click (convenience) |
 | three finger tap | middle click |
-| double tap, released | right click |
-| double tap, held | press left and drag — selection |
 
-Using finger count for right click rather than a double tap removes the delay
-that would otherwise sit on **every** left click: nothing has to wait to find
-out whether a second tap is coming.
+Right click lives on the strip rather than on a double tap, and the reason is
+worth keeping: a double tap that meant right click would still have sent its
+first tap's left click, because suppressing that would put a wait-and-see delay
+back on **every** left click. Right click would arrive preceded by a stray left
+click — harmless for a context menu, wrong on anything that acts immediately.
+Putting it on its own target costs a strip of screen and nothing else, and it
+leaves the double tap free to mean double click, which in turn makes
+double-tap-and-hold mean selection exactly as a real trackpad does.
 
-Whether the second press of a double tap becomes a selection or a right click
-is decided **by time, not by movement**. A travel-based test would work on the
-trackpad and never fire in Air Mouse mode, where the cursor is driven by
-rotation and the finger does not move at all. The threshold is
+Whether the second press of a double tap becomes a selection or the second half
+of a double click is decided **by time, not by movement**. A travel-based test
+would work on the trackpad and never fire in Air Mouse mode, where the cursor is
+driven by rotation and the finger does not move at all. The threshold is
 `GestureTiming.tapMaxDuration` again, so the same hold length means the same
 thing everywhere. Movement during the undecided press is withheld and flushed
-only once it resolves into a drag, so a press that turns out to be a click
-never nudges the cursor.
+only once it resolves into a drag, so a press that turns out to be a click never
+nudges the cursor.
 
-Two consequences of putting right click on the double tap, both real:
-
-- **The first tap still sends its left click.** Suppressing it would mean
-  delaying every left click to see whether a second tap follows, which is the
-  latency the finger-count scheme exists to avoid. Right click therefore arrives
-  preceded by a left click — harmless for opening a context menu, wrong if the
-  first click lands on something that acts immediately.
-- **True double click is no longer expressible.** Two quick taps now read as
-  left then right. Anything needing a double click has to come from the host or
-  from a gesture yet to be assigned.
+The host, not the phone, decides that two taps are a double click — see
+[Click sequences](#click-sequences).
 
 This has to be built on UIKit touch handling. SwiftUI's `DragGesture` is a
 single-touch abstraction that never reports how many fingers are down, so the
@@ -162,13 +165,6 @@ scroll, taps, and drag keep working exactly as before. Re-engaging resets the
 filter's smoothing state, so motion from before the clutch went down cannot
 arrive as a jump on the first sample after it.
 
-Air Mouse adds a strip down the right edge that points the gyro at the scroll
-wheel instead of the cursor, since two-finger scrolling is awkward while the
-same hand is holding and aiming the phone. It carries its own sensitivity —
-scrolling needs a far gentler response than the pointer — and needs no UIKit
-touch handling of its own, because it only has to know whether a finger is
-resting on it.
-
 Engaging does not start motion immediately. The cursor is held still for
 `GestureTiming.tapMaxDuration`; release inside that window and the gesture was a
 tap, hold past it and the cursor comes alive. Otherwise tapping to click drags
@@ -183,8 +179,10 @@ constant makes the two outcomes complementary by construction rather than by
 coincidence. The moment motion begins, the filter is reset a second time — the
 rotation made while deciding to hold would otherwise land as a jump.
 
-The scroll strip takes no such pause. The delay exists only to tell a tap from
-a hold, and the strip has no tap action, so waiting there would be pure latency.
+The scroll strip waits too, for the same reason: it has a tap action of its own
+now, so scrolling before the press has resolved would nudge the page on the way
+to a right click. An earlier version skipped the pause there, correctly, back
+when the strip did nothing but scroll.
 
 The watch has no touch surface to spare and will need its own answer — holding
 the Digital Crown is the obvious candidate.
@@ -224,6 +222,23 @@ Platform notes that will otherwise cost an afternoon each:
   model, not a capability one: `libei` prompts for consent, `uinput` does not.
 - **Linux** needs write access to `/dev/uinput` — a udev rule granting a group,
   or root. Install-time step.
+
+### Click sequences
+
+macOS reads the click count from a field on the event rather than timing
+presses itself, so two quick presses both carrying a count of 1 arrive as two
+unrelated single clicks and **no application ever sees a double click**. The
+injector therefore tracks consecutive presses and raises the count.
+
+This belongs to the host, not the phone. The phone knows it sent two taps, but
+whether they are close enough in time and space to form a sequence is a
+platform judgement — and on Windows and Linux the OS makes it, so those
+injectors will need nothing here.
+
+A sequence continues only while the presses share a button, fall inside the
+double-click interval, and stay within a few points of each other. The release
+repeats whatever count its press carried, or an application would see a double
+click begin and a single click end.
 
 ### Cursor model — absolute injection, host-side acceleration
 
