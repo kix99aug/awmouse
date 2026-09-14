@@ -15,14 +15,13 @@ final class Client: ObservableObject {
     private var task: URLSessionWebSocketTask?
     private let encoder = JSONEncoder()
 
-    // Move coalescing. While a send is in flight, further deltas accumulate
+    // Motion coalescing. While a send is in flight, further deltas accumulate
     // into a single pending sample instead of queueing behind it: a backlog of
-    // stale deltas makes the cursor rubber-band. Clicks deliberately bypass
-    // this and are never dropped or merged.
+    // stale deltas makes the cursor rubber-band. Button events deliberately
+    // bypass this and are never dropped or merged.
     private var inflight = false
-    private var pendingDX = 0.0
-    private var pendingDY = 0.0
-    private var pendingDT = 0.0
+    private var moveDX = 0.0, moveDY = 0.0, moveDT = 0.0
+    private var scrollDX = 0.0, scrollDY = 0.0
 
     // MARK: - Connection
 
@@ -56,7 +55,8 @@ final class Client: ObservableObject {
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         inflight = false
-        pendingDX = 0; pendingDY = 0; pendingDT = 0
+        moveDX = 0; moveDY = 0; moveDT = 0
+        scrollDX = 0; scrollDY = 0
         state = .disconnected
     }
 
@@ -80,10 +80,16 @@ final class Client: ObservableObject {
     // MARK: - Input
 
     func move(dx: Double, dy: Double, dt: Double) {
-        pendingDX += dx
-        pendingDY += dy
-        pendingDT += dt
-        flushMove()
+        moveDX += dx
+        moveDY += dy
+        moveDT += dt
+        flush()
+    }
+
+    func scroll(dx: Double, dy: Double) {
+        scrollDX += dx
+        scrollDY += dy
+        flush()
     }
 
     func click(_ button: MouseButton) {
@@ -95,17 +101,27 @@ final class Client: ObservableObject {
         send(.button(button, down: down))
     }
 
-    private func flushMove() {
-        guard !inflight, pendingDX != 0 || pendingDY != 0 else { return }
+    /// Move and scroll are mutually exclusive — the surface is in one mode at a
+    /// time — so a single in-flight slot serves both.
+    private func flush() {
+        guard !inflight else { return }
 
-        let msg = Msg.move(dx: pendingDX, dy: pendingDY, dt: pendingDT)
-        pendingDX = 0; pendingDY = 0; pendingDT = 0
+        let msg: Msg
+        if moveDX != 0 || moveDY != 0 {
+            msg = .move(dx: moveDX, dy: moveDY, dt: moveDT)
+            moveDX = 0; moveDY = 0; moveDT = 0
+        } else if scrollDX != 0 || scrollDY != 0 {
+            msg = .scroll(dx: scrollDX, dy: scrollDY)
+            scrollDX = 0; scrollDY = 0
+        } else {
+            return
+        }
+
         inflight = true
-
         send(msg) { [weak self] in
             guard let self else { return }
             self.inflight = false
-            self.flushMove()
+            self.flush()
         }
     }
 

@@ -58,6 +58,43 @@ Deliberately *not* using the watchOS system Double Tap gesture
 (`.handGestureShortcut`): it requires Series 9 / Ultra 2 or newer, and it hands
 you one fixed action rather than single-vs-double discrimination.
 
+### iPhone gesture set
+
+Finger count carries the meaning, matching a real trackpad:
+
+| Gesture | Action |
+|---|---|
+| one finger drag | move cursor |
+| one finger tap | left click |
+| two finger drag | scroll |
+| two finger tap | right click |
+| three finger tap | middle click |
+| tap, then press and drag | drag with left button held |
+
+Using finger count for right click rather than a double tap removes the delay
+that would otherwise sit on **every** left click: nothing has to wait to find
+out whether a second tap is coming.
+
+This has to be built on UIKit touch handling. SwiftUI's `DragGesture` is a
+single-touch abstraction that never reports how many fingers are down, so the
+surface is effectively a small trackpad driver. Three details in it are not
+optional:
+
+- `isMultipleTouchEnabled` must be set, or every multi-finger gesture silently
+  degrades to one finger.
+- Motion is the centroid of the active touches, and the centroid **jumps**
+  whenever a finger lands or lifts. Re-anchor on every change to the touch set,
+  or each change is reported as a large spurious movement.
+- Fingers rarely land on the same event, so move-vs-scroll is committed only
+  after a few points of travel. Deciding at first touch would start a two-finger
+  scroll as a cursor move. The same staggering means a tap's finger count must
+  be the *peak* count seen during the touch, not the count at any one instant —
+  and that a drag which acquires a second finger was never a drag.
+
+The watch cannot borrow any of this: one wrist provides no finger count, so it
+keeps single-vs-double tap discrimination and pays the ~300 ms delay that the
+phone now avoids. See [Shared Swift package](#shared-swift-package-motioninput).
+
 ### Engage / clutch
 
 Gyro drifts and picks up incidental arm motion, so the cursor needs an explicit
@@ -182,8 +219,8 @@ worth more.
 
 ```json
 {"t":"m","dx":12,"dy":-4,"dt":33}  // relative, RAW (unaccelerated), dt in ms
-{"t":"c","b":"l","d":true}         // button l|r, down/up
-{"t":"s","dy":3}                   // scroll (reserved)
+{"t":"c","b":"l","d":true}         // button l|r|m, down/up
+{"t":"s","dx":0,"dy":3}            // scroll, raw delta
 ```
 
 Deltas on the wire stay **relative and unaccelerated** even though injection is

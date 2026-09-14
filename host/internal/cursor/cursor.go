@@ -32,23 +32,45 @@ type Curve struct {
 // losing pixel-level control.
 var DefaultCurve = Curve{Base: 0.72, K: 0.0013, P: 1.0, Min: 0.5, Max: 5.0}
 
+// Scroll uses a flat multiplier rather than the pointer curve: scrolling reads
+// as distance travelled, not as velocity, so acceleration makes it feel loose.
+type ScrollConfig struct {
+	Gain   float64
+	Invert bool
+}
+
+var DefaultScroll = ScrollConfig{Gain: 1.6, Invert: false}
+
 // resyncAfter is the idle gap after which we re-read the OS cursor position.
 // We hold cursor position as state, so a physical mouse moved in the meantime
 // would otherwise make the next gesture jump.
 const resyncAfter = 500 * time.Millisecond
 
 type Controller struct {
-	mu    sync.Mutex
-	inj   inject.Injector
-	curve Curve
+	mu     sync.Mutex
+	inj    inject.Injector
+	curve  Curve
+	scroll ScrollConfig
 
 	x, y                   float64
 	minX, minY, maxX, maxY float64
 	last                   time.Time
+
+	// Scroll deltas are emitted in whole units, so the fractional part has to
+	// survive between samples. Truncating each sample independently would make
+	// slow scrolling do nothing at all.
+	scrollAccX, scrollAccY float64
+
+	held map[inject.Button]bool
 }
 
-func New(inj inject.Injector, c Curve) *Controller {
-	ctl := &Controller{inj: inj, curve: c}
+func New(inj inject.Injector, c Curve, s ScrollConfig) *Controller {
+	ctl := &Controller{
+		inj:    inj,
+		curve:  c,
+		scroll: s,
+		held:   map[inject.Button]bool{},
+	}
 	ctl.mu.Lock()
 	ctl.resyncLocked()
 	ctl.mu.Unlock()
@@ -77,7 +99,9 @@ func (c *Controller) Move(dx, dy, dtMS float64) error {
 	defer c.mu.Unlock()
 
 	now := time.Now()
-	if now.Sub(c.last) > resyncAfter {
+	// Resyncing mid-drag would tear the drag, and the position cannot have
+	// drifted anyway while we hold the button.
+	if len(c.held) == 0 && now.Sub(c.last) > resyncAfter {
 		c.resyncLocked()
 	}
 	c.last = now
@@ -100,10 +124,52 @@ func (c *Controller) Move(dx, dy, dtMS float64) error {
 	return c.inj.MoveTo(c.x, c.y, ax, ay)
 }
 
+func (c *Controller) Scroll(dx, dy float64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	sign := 1.0
+	if c.scroll.Invert {
+		sign = -1
+	}
+
+	c.scrollAccX += dx * c.scroll.Gain * sign
+	c.scrollAccY += dy * c.scroll.Gain * sign
+
+	ix := math.Trunc(c.scrollAccX)
+	iy := math.Trunc(c.scrollAccY)
+	c.scrollAccX -= ix
+	c.scrollAccY -= iy
+
+	if ix == 0 && iy == 0 {
+		return nil
+	}
+	return c.inj.Scroll(ix, iy)
+}
+
 func (c *Controller) Button(b inject.Button, down bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if down {
+		c.held[b] = true
+	} else {
+		delete(c.held, b)
+	}
 	return c.inj.Button(b, down)
+}
+
+// ReleaseAll drops any held button. Call it when a client disconnects: a
+// connection lost mid-drag would otherwise leave the button stuck down, and the
+// user has no mouse to fix it with.
+func (c *Controller) ReleaseAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for b := range c.held {
+		_ = c.inj.Button(b, false)
+		delete(c.held, b)
+	}
 }
 
 func clamp(v, lo, hi float64) float64 {

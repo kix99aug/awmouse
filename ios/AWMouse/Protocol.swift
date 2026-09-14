@@ -17,6 +17,10 @@ struct Msg: Encodable {
         Msg(t: "m", dx: dx, dy: dy, dt: dt)
     }
 
+    static func scroll(dx: Double, dy: Double) -> Msg {
+        Msg(t: "s", dx: dx, dy: dy)
+    }
+
     static func button(_ button: MouseButton, down: Bool) -> Msg {
         Msg(t: "c", b: button.rawValue, d: down)
     }
@@ -25,4 +29,5 @@ struct Msg: Encodable {
 enum MouseButton: String {
     case left = "l"
     case right = "r"
+    case middle = "m"
 }

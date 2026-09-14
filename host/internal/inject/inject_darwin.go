@@ -6,9 +6,17 @@ package inject
 #cgo LDFLAGS: -framework ApplicationServices -framework CoreGraphics
 #include <ApplicationServices/ApplicationServices.h>
 
-static void moveTo(double x, double y, double dx, double dy) {
-	CGEventRef e = CGEventCreateMouseEvent(
-		NULL, kCGEventMouseMoved, CGPointMake(x, y), kCGMouseButtonLeft);
+// held: 0 none, 1 left, 2 right, 3 middle
+static void moveTo(double x, double y, double dx, double dy, int held) {
+	CGEventType t = kCGEventMouseMoved;
+	CGMouseButton b = kCGMouseButtonLeft;
+	switch (held) {
+	case 1: t = kCGEventLeftMouseDragged;  b = kCGMouseButtonLeft;   break;
+	case 2: t = kCGEventRightMouseDragged; b = kCGMouseButtonRight;  break;
+	case 3: t = kCGEventOtherMouseDragged; b = kCGMouseButtonCenter; break;
+	}
+
+	CGEventRef e = CGEventCreateMouseEvent(NULL, t, CGPointMake(x, y), b);
 	if (e == NULL) return;
 	// Apps that read motion rather than position (games, 3D viewports) see
 	// nothing without these, because absolute positioning carries no delta.
@@ -18,19 +26,38 @@ static void moveTo(double x, double y, double dx, double dy) {
 	CFRelease(e);
 }
 
-static void button(double x, double y, int right, int down) {
+// which: 0 left, 1 right, 2 middle
+static void button(double x, double y, int which, int down) {
 	CGEventType t;
 	CGMouseButton b;
-	if (right) {
+	switch (which) {
+	case 1:
 		b = kCGMouseButtonRight;
 		t = down ? kCGEventRightMouseDown : kCGEventRightMouseUp;
-	} else {
+		break;
+	case 2:
+		b = kCGMouseButtonCenter;
+		t = down ? kCGEventOtherMouseDown : kCGEventOtherMouseUp;
+		break;
+	default:
 		b = kCGMouseButtonLeft;
 		t = down ? kCGEventLeftMouseDown : kCGEventLeftMouseUp;
+		break;
 	}
+
 	CGEventRef e = CGEventCreateMouseEvent(NULL, t, CGPointMake(x, y), b);
 	if (e == NULL) return;
 	CGEventSetIntegerValueField(e, kCGMouseEventClickState, 1);
+	CGEventPost(kCGHIDEventTap, e);
+	CFRelease(e);
+}
+
+static void scrollBy(double dx, double dy) {
+	// Pixel units scroll smoothly, the way a trackpad does; line units move in
+	// notched steps like an old wheel mouse.
+	CGEventRef e = CGEventCreateScrollWheelEvent(
+		NULL, kCGScrollEventUnitPixel, 2, (int32_t)dy, (int32_t)dx);
+	if (e == NULL) return;
 	CGEventPost(kCGHIDEventTap, e);
 	CFRelease(e);
 }
@@ -77,32 +104,69 @@ var ErrNotTrusted = errors.New(
 		"(your terminal, if launched from a shell) access in " +
 		"System Settings > Privacy & Security > Accessibility")
 
-type darwinInjector struct{}
+type darwinInjector struct {
+	// held tracks which buttons are down, so that motion during a drag is
+	// emitted as a drag event rather than a plain move. Apps that implement
+	// text selection or window dragging listen only for the former.
+	held map[Button]bool
+}
 
 // New returns an Injector for the current platform.
 func New() (Injector, error) {
 	if C.trusted() == 0 {
 		return nil, ErrNotTrusted
 	}
-	return &darwinInjector{}, nil
+	return &darwinInjector{held: map[Button]bool{}}, nil
 }
 
 func (d *darwinInjector) MoveTo(x, y, dx, dy float64) error {
-	C.moveTo(C.double(x), C.double(y), C.double(dx), C.double(dy))
+	C.moveTo(C.double(x), C.double(y), C.double(dx), C.double(dy), C.int(d.heldCode()))
 	return nil
+}
+
+// heldCode picks one held button to attribute drag events to. Simultaneous
+// buttons are not a gesture the client can produce, so first match wins.
+func (d *darwinInjector) heldCode() int {
+	switch {
+	case d.held[ButtonLeft]:
+		return 1
+	case d.held[ButtonRight]:
+		return 2
+	case d.held[ButtonMiddle]:
+		return 3
+	default:
+		return 0
+	}
 }
 
 func (d *darwinInjector) Button(b Button, down bool) error {
 	x, y, _ := d.Position()
-	right := 0
-	if b == ButtonRight {
-		right = 1
+
+	which := 0
+	switch b {
+	case ButtonRight:
+		which = 1
+	case ButtonMiddle:
+		which = 2
 	}
+
 	dn := 0
 	if down {
 		dn = 1
 	}
-	C.button(C.double(x), C.double(y), C.int(right), C.int(dn))
+
+	C.button(C.double(x), C.double(y), C.int(which), C.int(dn))
+
+	if down {
+		d.held[b] = true
+	} else {
+		delete(d.held, b)
+	}
+	return nil
+}
+
+func (d *darwinInjector) Scroll(dx, dy float64) error {
+	C.scrollBy(C.double(dx), C.double(dy))
 	return nil
 }
 
@@ -118,4 +182,10 @@ func (d *darwinInjector) Position() (x, y float64, ok bool) {
 	return float64(cx), float64(cy), true
 }
 
-func (d *darwinInjector) Close() error { return nil }
+func (d *darwinInjector) Close() error {
+	// Never leave a button stuck down if the client vanished mid-drag.
+	for b := range d.held {
+		_ = d.Button(b, false)
+	}
+	return nil
+}

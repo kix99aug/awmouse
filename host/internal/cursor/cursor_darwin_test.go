@@ -26,7 +26,7 @@ func TestMoveMovesRealCursor(t *testing.T) {
 		_ = inj.MoveTo(startX, startY, 0, 0)
 	})
 
-	ctl := New(inj, DefaultCurve)
+	ctl := New(inj, DefaultCurve, DefaultScroll)
 
 	// Move away from wherever we started, so the assertion can't pass by
 	// accident from being clamped against a screen edge.

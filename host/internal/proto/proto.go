@@ -12,8 +12,9 @@ const (
 )
 
 const (
-	ButtonLeft  = "l"
-	ButtonRight = "r"
+	ButtonLeft   = "l"
+	ButtonRight  = "r"
+	ButtonMiddle = "m"
 )
 
 // Msg is every message type in one struct. The protocol is small enough that
@@ -21,9 +22,9 @@ const (
 type Msg struct {
 	T string `json:"t"`
 
-	// Move: raw unaccelerated delta in points, with the sampling interval that
-	// produced it. DT is carried explicitly rather than derived from arrival
-	// time so network jitter doesn't smear the acceleration curve.
+	// Move and scroll: raw unaccelerated delta in points, with the sampling
+	// interval that produced it. DT is carried explicitly rather than derived
+	// from arrival time so network jitter doesn't smear the acceleration curve.
 	DX float64 `json:"dx,omitempty"`
 	DY float64 `json:"dy,omitempty"`
 	DT float64 `json:"dt,omitempty"` // milliseconds

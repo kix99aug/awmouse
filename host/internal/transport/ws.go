@@ -35,7 +35,7 @@ func (w *WS) Endpoint() string {
 	return "awmouse://pair?ws=" + w.URL()
 }
 
-func (w *WS) Run(ctx context.Context, onMsg func(proto.Msg)) error {
+func (w *WS) Run(ctx context.Context, h Handler) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(rw http.ResponseWriter, r *http.Request) {
 		// The iOS client sends no Origin header, so the default same-origin
@@ -48,7 +48,10 @@ func (w *WS) Run(ctx context.Context, onMsg func(proto.Msg)) error {
 		defer c.CloseNow()
 
 		log.Printf("client connected: %s", r.RemoteAddr)
-		defer log.Printf("client disconnected: %s", r.RemoteAddr)
+		defer func() {
+			h.OnDisconnect()
+			log.Printf("client disconnected: %s", r.RemoteAddr)
+		}()
 
 		for {
 			_, data, err := c.Read(ctx)
@@ -60,7 +63,7 @@ func (w *WS) Run(ctx context.Context, onMsg func(proto.Msg)) error {
 				log.Printf("bad message: %v", err)
 				continue
 			}
-			onMsg(m)
+			h.OnMessage(m)
 		}
 	})
 

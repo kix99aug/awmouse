@@ -7,18 +7,34 @@ run the POC.
 
 ## Status
 
-POC: iPhone touch-trackpad → macOS cursor, over a LAN WebSocket.
+POC: iPhone touch-trackpad → macOS cursor, over a LAN WebSocket. Confirmed
+working on device.
 
 | Piece | State |
 |---|---|
 | macOS injection (`CGEvent`, absolute) | working |
 | Acceleration curve + cursor state | working, untuned |
-| iPhone touch trackpad | builds, needs on-device testing |
+| iPhone trackpad, full gesture set | working |
 | LAN WebSocket transport | working |
 | QR pairing | host renders it; in-app scanner not built (manual entry works) |
 | tailcat transport | not started — deliberately after the input pipeline |
 | Windows / Linux injection | not started |
 | watchOS app | not started |
+
+## Gestures
+
+| Gesture | Action |
+|---|---|
+| one finger drag | move cursor |
+| one finger tap | left click |
+| two finger drag | scroll |
+| two finger tap | right click |
+| three finger tap | middle click |
+| tap, then press and drag | drag with left button held |
+
+If scrolling feels inverted, run the host with `-scroll-invert`; `-scroll-gain`
+adjusts its sensitivity. Pointer feel is `cursor.DefaultCurve` in
+`host/internal/cursor/cursor.go`.
 
 ## Layout
 

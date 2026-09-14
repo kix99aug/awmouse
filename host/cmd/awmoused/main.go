@@ -22,6 +22,8 @@ import (
 
 func main() {
 	port := flag.Int("port", 8787, "listen port")
+	scrollGain := flag.Float64("scroll-gain", cursor.DefaultScroll.Gain, "scroll sensitivity")
+	scrollInvert := flag.Bool("scroll-invert", false, "reverse scroll direction")
 	flag.Parse()
 
 	log.SetFlags(log.Ltime)
@@ -36,7 +38,10 @@ func main() {
 	}
 	defer inj.Close()
 
-	ctl := cursor.New(inj, cursor.DefaultCurve)
+	ctl := cursor.New(inj, cursor.DefaultCurve, cursor.ScrollConfig{
+		Gain:   *scrollGain,
+		Invert: *scrollInvert,
+	})
 
 	ws := transport.NewWS(*port)
 	printPairing(ws)
@@ -44,30 +49,44 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	err = ws.Run(ctx, func(m proto.Msg) {
-		if err := handle(ctl, m); err != nil {
-			log.Printf("handle %q: %v", m.T, err)
-		}
-	})
-	if err != nil {
+	if err := ws.Run(ctx, &handler{ctl: ctl}); err != nil {
 		log.Fatalf("transport: %v", err)
 	}
 }
 
-func handle(ctl *cursor.Controller, m proto.Msg) error {
+type handler struct {
+	ctl *cursor.Controller
+}
+
+func (h *handler) OnMessage(m proto.Msg) {
+	var err error
 	switch m.T {
 	case proto.KindMove:
-		return ctl.Move(m.DX, m.DY, m.DT)
-	case proto.KindClick:
-		b := inject.ButtonLeft
-		if m.B == proto.ButtonRight {
-			b = inject.ButtonRight
-		}
-		return ctl.Button(b, m.D)
+		err = h.ctl.Move(m.DX, m.DY, m.DT)
 	case proto.KindScroll:
-		return nil // reserved
+		err = h.ctl.Scroll(m.DX, m.DY)
+	case proto.KindClick:
+		err = h.ctl.Button(button(m.B), m.D)
 	default:
-		return fmt.Errorf("unknown kind")
+		err = fmt.Errorf("unknown kind %q", m.T)
+	}
+	if err != nil {
+		log.Printf("handle %q: %v", m.T, err)
+	}
+}
+
+func (h *handler) OnDisconnect() {
+	h.ctl.ReleaseAll()
+}
+
+func button(b string) inject.Button {
+	switch b {
+	case proto.ButtonRight:
+		return inject.ButtonRight
+	case proto.ButtonMiddle:
+		return inject.ButtonMiddle
+	default:
+		return inject.ButtonLeft
 	}
 }
 

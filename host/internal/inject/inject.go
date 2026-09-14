@@ -11,6 +11,7 @@ type Button int
 const (
 	ButtonLeft Button = iota
 	ButtonRight
+	ButtonMiddle
 )
 
 type Injector interface {
@@ -18,9 +19,15 @@ type Injector interface {
 	// post-acceleration deltas that produced this position — some platforms
 	// carry them alongside so that apps reading motion rather than position
 	// (games, 3D viewports) still see movement.
+	//
+	// Implementations must emit a *drag* rather than a *move* while a button is
+	// held, since many apps listen for one and not the other.
 	MoveTo(x, y, dx, dy float64) error
 
 	Button(b Button, down bool) error
+
+	// Scroll takes whole units; fractional accumulation belongs to the caller.
+	Scroll(dx, dy float64) error
 
 	// Bounds returns the union of all displays, as origin plus size. The origin
 	// is not always (0,0): a display placed left of or above the primary one
