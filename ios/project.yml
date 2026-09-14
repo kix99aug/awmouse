@@ -51,6 +51,12 @@ targets:
           awmouse connects to the helper running on your computer to move its
           cursor.
 
+        # Raw gyroscope access through CMMotionManager works without this, but
+        # Apple asks for it wherever motion data is read and review expects it.
+        NSMotionUsageDescription: >-
+          awmouse reads device rotation so you can aim the cursor by tilting
+          your phone.
+
         # The POC transport is plain wss-less ws:// to a private address, which
         # App Transport Security blocks by default.
         NSAppTransportSecurity:

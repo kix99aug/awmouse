@@ -20,7 +20,13 @@ public final class MotionSource {
 
     public private(set) var isRunning = false
 
-    private let manager = CMMotionManager()
+    /// Created on first use rather than on init. Constructing a
+    /// `CMMotionManager` opens a connection to the motion daemon, and this type
+    /// is typically built while the app is starting up — which puts that work
+    /// on the path to the first frame even when the user never selects a
+    /// motion-driven mode.
+    private lazy var manager = CMMotionManager()
+
     private var filter: PointerFilter
     private var lastTimestamp: TimeInterval?
 
@@ -28,6 +34,8 @@ public final class MotionSource {
         self.filter = PointerFilter(config: config)
     }
 
+    /// Touching this builds the underlying manager, so ask only once the user
+    /// has actually chosen a motion-driven mode.
     public var isAvailable: Bool { manager.isDeviceMotionAvailable }
 
     public func start(updateInterval: TimeInterval = 1.0 / 60) {
