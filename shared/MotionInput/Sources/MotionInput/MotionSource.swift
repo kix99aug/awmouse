@@ -75,15 +75,24 @@ public final class MotionSource {
         // carries a bias that would walk the cursor across the screen while the
         // device sits still.
         //
-        // Axes for a phone held upright in portrait, screen toward the user:
-        // turning it left/right rotates about the device's Y axis, tilting it
-        // up/down rotates about X. Both signs are empirical — flip them with
-        // `invertX` / `invertY` rather than editing here.
-        let (dx, dy) = filter.process(
-            yaw: -motion.rotationRate.y,
-            pitch: -motion.rotationRate.x,
-            dt: dt
+        // Which device axis means "aim sideways" depends on how the device is
+        // held, so gravity resolves it rather than a fixed axis being assumed.
+        let (yaw, pitch) = MotionGeometry.resolve(
+            rotationRate: .init(
+                x: motion.rotationRate.x,
+                y: motion.rotationRate.y,
+                z: motion.rotationRate.z
+            ),
+            gravity: .init(
+                x: motion.gravity.x,
+                y: motion.gravity.y,
+                z: motion.gravity.z
+            )
         )
+
+        // Both negated: a positive yaw turns the device left, and a positive
+        // pitch aims it upward, while screen coordinates grow right and down.
+        let (dx, dy) = filter.process(yaw: -yaw, pitch: -pitch, dt: dt)
 
         guard dx != 0 || dy != 0 else { return }
         onDelta?(dx, dy, dt * 1000)

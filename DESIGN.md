@@ -47,10 +47,11 @@ what it would take to lift this.
 CoreMotion is identical on iOS and watchOS, so the sensor pipeline is written
 once and linked into both targets:
 
+- `MotionGeometry` — device-frame rotation → world-referenced yaw and pitch.
 - `PointerFilter` — rotation rate → pointer delta. Pure math with no CoreMotion
   import, so the part that decides how an air mouse *feels* can be unit tested
   rather than only evaluated by waving a phone around.
-- `MotionSource` — the CoreMotion wrapper that feeds it.
+- `MotionSource` — the CoreMotion wrapper that feeds both.
 - tap detection (watch only, not yet built): peak detection on
   `CMDeviceMotion.userAcceleration` + ~300 ms debounce to disambiguate single
   from double.
@@ -70,6 +71,16 @@ Three decisions inside the filter, each of which is felt in the hand:
 Use `CMDeviceMotion.rotationRate`, never `CMMotionManager.gyroData.rotationRate`
 — the former is bias-corrected by CoreMotion's fusion, the latter is raw and its
 bias walks the cursor across the screen while the device sits still.
+
+**Resolve the aiming axes against gravity, never against a fixed device axis.**
+Which axis means "aim sideways" depends on posture: held upright, turning left
+rotates about the device's Y axis; lying flat, that same Y axis is horizontal
+and rotating about it *rolls* the device instead. Assuming a fixed axis gets one
+posture right and silently reads an unrelated gesture in the other — and with
+whatever sign that unrelated gesture happens to carry, which is how this
+surfaced: aiming worked upright, while flat the cursor answered to roll and
+answered backwards. Projecting onto world vertical makes aiming mean one thing
+at every angle.
 
 An earlier draft of this document also put the wire protocol types here. That
 was wrong: the watch talks to the phone over WatchConnectivity and never encodes
