@@ -21,7 +21,9 @@ import (
 )
 
 func main() {
-	port := flag.Int("port", 8787, "listen port")
+	mode := flag.String("transport", "ws", "transport: ws (LAN WebSocket) or tailcat")
+	port := flag.Int("port", 8787, "listen port (ws transport)")
+	identityPath := flag.String("identity", "", "tailcat identity file (default: per-user config dir)")
 	scrollGain := flag.Float64("scroll-gain", cursor.DefaultScroll.Gain, "scroll sensitivity")
 	scrollInvert := flag.Bool("scroll-invert", false, "reverse scroll direction")
 	flag.Parse()
@@ -43,15 +45,46 @@ func main() {
 		Invert: *scrollInvert,
 	})
 
-	ws := transport.NewWS(*port)
-	printPairing(ws)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := ws.Run(ctx, &handler{ctl: ctl}); err != nil {
+	var tr transport.Transport
+	var manual string
+	switch *mode {
+	case "ws":
+		ws := transport.NewWS(*port)
+		tr, manual = ws, ws.URL()
+	case "tailcat":
+		tc, err := startTailcat(ctx, *identityPath)
+		if err != nil {
+			log.Fatalf("tailcat: %v", err)
+		}
+		tr, manual = tc, string(tc.Addr())
+	default:
+		log.Fatalf("unknown -transport %q", *mode)
+	}
+	printPairing(tr, manual)
+
+	if err := tr.Run(ctx, &handler{ctl: ctl}); err != nil {
 		log.Fatalf("transport: %v", err)
 	}
+}
+
+func startTailcat(ctx context.Context, identityPath string) (*transport.Tailcat, error) {
+	if identityPath == "" {
+		p, err := transport.DefaultIdentityPath()
+		if err != nil {
+			return nil, err
+		}
+		identityPath = p
+	}
+	id, err := transport.LoadOrCreateIdentity(identityPath)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("identity: %s", identityPath)
+	log.Printf("connecting to relay...")
+	return transport.NewTailcat(ctx, id, transport.TailcatPort, nil)
 }
 
 type handler struct {
@@ -90,8 +123,8 @@ func button(b string) inject.Button {
 	}
 }
 
-func printPairing(ws *transport.WS) {
+func printPairing(tr transport.Transport, manual string) {
 	fmt.Println()
-	qrterminal.GenerateHalfBlock(ws.Endpoint(), qrterminal.L, os.Stdout)
-	fmt.Printf("\n  scan the code, or enter this manually:\n\n      %s\n\n", ws.URL())
+	qrterminal.GenerateHalfBlock(tr.Endpoint(), qrterminal.L, os.Stdout)
+	fmt.Printf("\n  scan the code, or enter this manually:\n\n      %s\n\n", manual)
 }

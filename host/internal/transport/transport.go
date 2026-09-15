@@ -8,6 +8,8 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 
 	"awmouse/host/internal/proto"
 )
@@ -29,4 +31,16 @@ type Transport interface {
 	// the POC, a pairing token once tailcat lands. It gets rendered as the QR
 	// code on the host's terminal.
 	Endpoint() string
+}
+
+// dispatch decodes one JSON message and hands it to h. A malformed message is
+// logged and skipped rather than ending the connection: dropping the link
+// over one bad frame would leave the user with no mouse.
+func dispatch(h Handler, data []byte) {
+	var m proto.Msg
+	if err := json.Unmarshal(data, &m); err != nil {
+		log.Printf("bad message: %v", err)
+		return
+	}
+	h.OnMessage(m)
 }

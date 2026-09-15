@@ -2,6 +2,9 @@
 ios/AWMouse.xcodeproj/
 ios/AWMouse/Info.plist
 
+# gomobile output — `make tunnel` in ios/ rebuilds it
+ios/Frameworks/
+
 .DS_Store
 *.xcuserstate
 xcuserdata/
@@ -9,6 +12,7 @@ DerivedData/
 
 host/awmoused
 host/awmoused.exe
+host/awmoused.exe~
 
 # Personal signing identity — see ios/Config/Local.xcconfig.example
 ios/Config/Local.xcconfig

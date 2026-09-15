@@ -395,9 +395,13 @@ Roughly in order of how likely they are to hurt:
 2. **Latency budget.** Three hops (watch → phone → host → OS). Each needs to
    stay lean or the cursor feels laggy. Measure early, on the real path.
 3. **macOS Accessibility permission.** Real first-run UX friction.
-4. **tailcat specifics to verify:** exact Go API surface, token format and byte
-   size (QR capacity is ~2.9 KB alphanumeric, so almost certainly fine, but
-   unconfirmed), and whether `gomobile bind` builds it cleanly for iOS.
+4. **tailcat specifics** — mostly settled. The library (`github.com/tailscale/tailcat`,
+   v0.6.0) exposes `Server` with an `OnTCP` accept hook and `Client.DialTCPPort`;
+   the address is ~260 bytes of base64url, which is a comfortable QR. The
+   host and phone halves pass a loopback-relay test, and the phone package
+   cross-compiles for `ios/arm64` and `android/arm64` with cgo off. What is
+   still unverified is `gomobile bind` itself and the Swift bridging, which
+   need a Mac.
 5. **Background execution** on iOS while the phone is pocketed and the watch is
    driving — may constrain how the relay stays alive.
 ```

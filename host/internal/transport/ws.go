@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -10,8 +9,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-
-	"awmouse/host/internal/proto"
 )
 
 // WS is the POC transport: a plain WebSocket server on the local network.
@@ -58,12 +55,7 @@ func (w *WS) Run(ctx context.Context, h Handler) error {
 			if err != nil {
 				return
 			}
-			var m proto.Msg
-			if err := json.Unmarshal(data, &m); err != nil {
-				log.Printf("bad message: %v", err)
-				continue
-			}
-			h.OnMessage(m)
+			dispatch(h, data)
 		}
 	})
 

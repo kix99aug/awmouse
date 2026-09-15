@@ -19,7 +19,7 @@ working on device.
 | Shared `MotionInput` package | working, unit tested |
 | LAN WebSocket transport | working |
 | QR pairing | host renders it; in-app scanner not built (manual entry works) |
-| tailcat transport | not started — deliberately after the input pipeline |
+| tailcat transport | host side working, tested over a loopback relay; phone framework written, not yet bound or run on a device |
 | Windows injection (`SendInput`, absolute) | working — cursor test passes on a 200% display; not yet driven from the phone |
 | Linux injection (`uinput`) | not started |
 | watchOS app | not started |
@@ -76,7 +76,8 @@ host/                       Go daemon
   internal/proto/           wire format
   internal/inject/          absolute cursor injection, per-OS
   internal/cursor/          acceleration curve + position state
-  internal/transport/       Transport interface; WebSocket impl (tailcat swaps in here)
+  internal/transport/       Transport interface; LAN WebSocket and tailcat impls
+  mobile/awmtunnel/         the phone's end of the tailcat pipe, bound with gomobile
 shared/MotionInput/         Swift package — gyro filtering, shared with watchOS later
 ios/
   project.yml               XcodeGen source of truth — edit this, not the .xcodeproj
@@ -92,7 +93,29 @@ cd host
 go run ./cmd/awmoused
 ```
 
-It prints a QR code and a `ws://` address.
+It prints a QR code and a `ws://` address, reachable on the local network.
+
+To work from any network instead, run it over tailcat:
+
+```sh
+go run ./cmd/awmoused -transport tailcat
+```
+
+That prints a `tc…` address in place of the URL. It is the host's keys plus
+its relay, so it is a secret — anyone holding it can drive the cursor — and
+it is stable across restarts, because the identity behind it is kept in the
+per-user config directory (`-identity` overrides the path). Starting takes a
+second or two while the nearest relay is measured. Nothing needs opening in a
+firewall: the relay is only used to find each other, and the traffic moves to
+a direct path once one exists.
+
+The phone app reaches the tunnel through a Go framework that must be built
+once on the Mac, before the Xcode project will resolve:
+
+```sh
+go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init
+cd ios && make tunnel
+```
 
 macOS needs Accessibility permission, or `CGEventPost` silently does nothing.
 The grant attaches to the app that owns the process, so when running from a
@@ -137,9 +160,9 @@ Run on a real device. The simulator's drag events come from a mouse, which
 tells you nothing about how the trackpad actually feels — which is the only
 question the POC exists to answer.
 
-Enter the `ws://` address by hand, or scan the QR (it deep-links via
-`awmouse://pair?ws=…`). Phone and computer must be on the same network; the LAN
-restriction disappears once tailcat replaces this transport.
+Enter the address by hand, or scan the QR (it deep-links via
+`awmouse://pair?ws=…` or `?tc=…`). Over `ws://` the phone and computer must
+be on the same network; over tailcat they need not be.
 
 ## Tests
 
@@ -151,6 +174,11 @@ cd shared/MotionInput && swift test
 `TestMoveMovesRealCursor` moves your actual cursor and puts it back — it is the
 only honest way to check that native injection reaches the window server. It
 runs on macOS and Windows; on Linux there is no injector yet.
+
+The tailcat tests (`internal/transport`, `mobile/awmtunnel`) run a real
+WireGuard tunnel between the host transport and the phone package, through a
+DERP relay started on loopback — no network access, and they finish in well
+under a second.
 
 The `MotionInput` tests are pure math and need no device. The one that matters
 most is `stillnessProducesNoDrift`: a cursor that wanders while the phone is
