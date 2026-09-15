@@ -106,11 +106,13 @@ workflows:
 
   # Produces an installable build. Before this can run:
   #   1. Codemagic › Teams › Integrations › App Store Connect: add an API key
-  #      and name it "awmouse" (or change `app_store_connect` below).
-  #   2. Register the phone's UDID in the developer portal; a development
-  #      profile only installs on listed devices.
-  # Codemagic then fetches or creates the certificate and profile for the
-  # bundle id, and `use-profiles` writes team and profile into the freshly
+  #      with the App Manager role (Developer cannot create profiles) and
+  #      name it "awmouse" (or change `app_store_connect` below).
+  #   2. Register the phone's UDID in the developer portal. A development
+  #      profile cannot exist with zero devices, so `--create` fails until
+  #      there is at least one.
+  # fetch-signing-files then creates the bundle id, certificate and profile
+  # as needed, and `use-profiles` writes team and profile into the freshly
   # generated project — so Local.xcconfig can stay empty here too.
   ios-signed:
     name: iOS app (development build)
@@ -126,10 +128,12 @@ workflows:
       app_store_connect: awmouse
     environment:
       xcode: latest
-      ios_signing:
-        distribution_type: development
-        bundle_identifier: space.keybo.awmouse
     scripts:
+      - name: Fetch or create signing files
+        script: |
+          app-store-connect fetch-signing-files "space.keybo.awmouse" --type IOS_APP_DEVELOPMENT --platform IOS --create
+          keychain initialize
+          keychain add-certificates
       - *install_go
       - name: Install XcodeGen and gomobile
         script: |
@@ -148,9 +152,7 @@ workflows:
       - name: Build IPA
         working_directory: ios
         script: |
-          xcode-project build-ipa \
-            --project AWMouse.xcodeproj \
-            --scheme AWMouse
+          xcode-project build-ipa --project AWMouse.xcodeproj --scheme AWMouse
     artifacts:
       - ios/build/ios/ipa/*.ipa
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
