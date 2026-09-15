@@ -1,11 +1,21 @@
-PROJECT := AWMouse.xcodeproj
-LOCAL   := Config/Local.xcconfig
+PROJECT   := AWMouse.xcodeproj
+LOCAL     := Config/Local.xcconfig
+FRAMEWORK := Frameworks/Awmtunnel.xcframework
+GOSRC     := $(shell find ../host/mobile/awmtunnel -name '*.go' -not -name '*_test.go') ../host/go.mod
 
-.PHONY: project open clean
+.PHONY: project open clean tunnel
 
 ## Regenerate the Xcode project from project.yml.
-project: $(LOCAL)
+project: $(LOCAL) $(FRAMEWORK)
 	xcodegen generate
+
+## Bind the Go tunnel package into an xcframework. Needs gomobile once:
+##   go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init
+## The output is gitignored; it is ~40 MB of WireGuard and gVisor.
+tunnel: $(FRAMEWORK)
+
+$(FRAMEWORK): $(GOSRC)
+	cd ../host && gomobile bind -target ios -iosversion 17.0 -o ../ios/$(FRAMEWORK) ./mobile/awmtunnel
 
 ## Seed the local signing config on a fresh checkout, so that generating the
 ## project never fails just because the gitignored file isn't there yet.
@@ -17,4 +27,4 @@ open: project
 	open $(PROJECT)
 
 clean:
-	rm -rf $(PROJECT)
+	rm -rf $(PROJECT) $(FRAMEWORK)

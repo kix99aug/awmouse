@@ -10,9 +10,11 @@ final class Client: ObservableObject {
     }
 
     @Published private(set) var state: State = .disconnected
-    @Published var lastURL: String = UserDefaults.standard.string(forKey: "lastURL") ?? ""
+    @Published private(set) var lastTarget: String = UserDefaults.standard.string(forKey: "lastURL") ?? ""
 
-    private var task: URLSessionWebSocketTask?
+    private var link: Link?
+    private var pinger: Task<Void, Never>?
+    private var dialGeneration = 0 // a dial that finishes after a newer connect() is discarded
     private let encoder = JSONEncoder()
 
     // Motion coalescing. While a send is in flight, further deltas accumulate
@@ -25,53 +27,77 @@ final class Client: ObservableObject {
 
     // MARK: - Connection
 
-    func connect(to url: URL) {
+    func connect(to target: Target) {
         disconnect()
         state = .connecting
 
-        let t = URLSession.shared.webSocketTask(with: url)
-        task = t
-        t.resume()
+        switch target {
+        case .webSocket(let url):
+            link = WebSocketLink(
+                url: url,
+                onOpen: { [weak self] in self?.opened(target) },
+                onFailure: { [weak self] error in self?.failed(error.localizedDescription) })
 
-        // A websocket task reports failure only on first I/O, so ping to find
-        // out whether we actually reached anything.
-        t.sendPing { [weak self] error in
-            Task { @MainActor in
-                guard let self, self.task === t else { return }
-                if let error {
-                    self.state = .failed(error.localizedDescription)
-                } else {
-                    self.state = .connected
-                    self.lastURL = url.absoluteString
-                    UserDefaults.standard.set(url.absoluteString, forKey: "lastURL")
+        case .tunnel(let address):
+            dialGeneration += 1
+            let generation = dialGeneration
+            Task { [weak self] in
+                do {
+                    let l = try await TunnelLink.dial(address: address) { [weak self] reason in
+                        self?.failed("connection closed: " + reason)
+                    }
+                    // The user may have cancelled or retargeted while we
+                    // were dialing.
+                    guard let self, self.dialGeneration == generation,
+                          case .connecting = self.state
+                    else { l.close(); return }
+                    self.link = l
+                    self.opened(target)
+                    self.startPinging(l)
+                } catch {
+                    self?.failed(error.localizedDescription)
                 }
             }
         }
-
-        receiveLoop(on: t)
     }
 
     func disconnect() {
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
+        pinger?.cancel()
+        pinger = nil
+        link?.close()
+        link = nil
         inflight = false
         moveDX = 0; moveDY = 0; moveDT = 0
         scrollDX = 0; scrollDY = 0
         state = .disconnected
     }
 
-    /// The host sends nothing, but the receive loop is what surfaces a dropped
-    /// or refused connection.
-    private func receiveLoop(on t: URLSessionWebSocketTask) {
-        t.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self, self.task === t else { return }
-                switch result {
-                case .success:
-                    self.receiveLoop(on: t)
-                case .failure(let error):
-                    self.state = .failed(error.localizedDescription)
-                    self.task = nil
+    private func opened(_ target: Target) {
+        state = .connected
+        lastTarget = target.text
+        UserDefaults.standard.set(target.text, forKey: "lastURL")
+    }
+
+    private func failed(_ message: String) {
+        guard state != .disconnected else { return } // torn down on purpose
+        pinger?.cancel()
+        pinger = nil
+        link = nil
+        state = .failed(message)
+    }
+
+    /// The tunnel cannot tell a dead host from a quiet one on its own — see
+    /// `TunnelLink.ping` — so ask it every few seconds.
+    private func startPinging(_ l: TunnelLink) {
+        pinger = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if Task.isCancelled { return }
+                do {
+                    _ = try await l.ping()
+                } catch {
+                    self?.failed("host not responding")
+                    return
                 }
             }
         }
@@ -126,20 +152,16 @@ final class Client: ObservableObject {
     }
 
     private func send(_ msg: Msg, then done: (@MainActor () -> Void)? = nil) {
-        guard let task, let data = try? encoder.encode(msg),
+        guard let link, let data = try? encoder.encode(msg),
               let json = String(data: data, encoding: .utf8)
         else {
             done?()
             return
         }
 
-        task.send(.string(json)) { [weak self] error in
-            Task { @MainActor in
-                if let error, let self {
-                    self.state = .failed(error.localizedDescription)
-                }
-                done?()
-            }
+        link.send(json) { [weak self] error in
+            if let error { self?.failed(error.localizedDescription) }
+            done?()
         }
     }
 }

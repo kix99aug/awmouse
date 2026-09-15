@@ -15,19 +15,19 @@ struct ConnectView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            TextField("ws://192.168.1.10:8787/ws", text: $urlText)
+            TextField("tc… address, or ws://192.168.1.10:8787/ws", text: $urlText)
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
 
             Button("Connect") {
-                if let url = URL(string: urlText.trimmingCharacters(in: .whitespaces)) {
-                    client.connect(to: url)
+                if let target = Target(parsing: urlText) {
+                    client.connect(to: target)
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(urlText.isEmpty)
+            .disabled(Target(parsing: urlText) == nil)
 
             if case .failed(let message) = client.state {
                 Text(message)
@@ -44,7 +44,7 @@ struct ConnectView: View {
         }
         .padding(24)
         .onAppear {
-            if urlText.isEmpty { urlText = client.lastURL }
+            if urlText.isEmpty { urlText = client.lastTarget }
         }
     }
 }

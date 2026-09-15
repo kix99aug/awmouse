@@ -25,6 +25,9 @@ targets:
       - AWMouse
     dependencies:
       - package: MotionInput
+      # The Go tunnel, bound by `make tunnel`. Static, so not embedded.
+      - framework: Frameworks/Awmtunnel.xcframework
+        embed: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.awmouse.AWMouse
