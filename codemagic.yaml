@@ -76,21 +76,14 @@ workflows:
       xcode: latest
     scripts:
       - *install_go
-      - name: Install XcodeGen and gomobile
-        script: |
-          brew install xcodegen
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          export PATH="$HOME/go/bin:$PATH"
-          gomobile init
+      - name: Install XcodeGen
+        script: brew install xcodegen
       - name: Test MotionInput
         working_directory: shared/MotionInput
         script: swift test
       - name: Bind the tunnel and generate the project
         working_directory: ios
-        script: |
-          export PATH="$HOME/go/bin:$PATH"
-          # Seeds Config/Local.xcconfig (empty team) and binds Awmtunnel.xcframework.
-          make project
+        script: make project
       - name: Build for device, unsigned
         working_directory: ios
         script: |
@@ -142,17 +135,11 @@ workflows:
           keychain initialize
           keychain add-certificates
       - *install_go
-      - name: Install XcodeGen and gomobile
-        script: |
-          brew install xcodegen
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          export PATH="$HOME/go/bin:$PATH"
-          gomobile init
+      - name: Install XcodeGen
+        script: brew install xcodegen
       - name: Bind the tunnel and generate the project
         working_directory: ios
-        script: |
-          export PATH="$HOME/go/bin:$PATH"
-          make project
+        script: make project
       - name: Apply signing to the generated project
         working_directory: ios
         script: xcode-project use-profiles

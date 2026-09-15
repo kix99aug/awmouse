@@ -110,10 +110,10 @@ firewall: the relay is only used to find each other, and the traffic moves to
 a direct path once one exists.
 
 The phone app reaches the tunnel through a Go framework that must be built
-once on the Mac, before the Xcode project will resolve:
+once on the Mac, before the Xcode project will resolve — gomobile is a module
+tool of `host/go.mod`, so nothing to install beyond Go and Xcode:
 
 ```sh
-go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init
 cd ios && make tunnel
 ```
 

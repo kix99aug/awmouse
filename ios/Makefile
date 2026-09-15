@@ -9,13 +9,13 @@ GOSRC     := $(shell find ../host/mobile/awmtunnel -name '*.go' -not -name '*_te
 project: $(LOCAL) $(FRAMEWORK)
 	xcodegen generate
 
-## Bind the Go tunnel package into an xcframework. Needs gomobile once:
-##   go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init
-## The output is gitignored; it is ~40 MB of WireGuard and gVisor.
+## Bind the Go tunnel package into an xcframework. gomobile is a module tool
+## of host/go.mod, so Go and Xcode are the only prerequisites. The output is
+## gitignored; it is ~40 MB of WireGuard and gVisor.
 tunnel: $(FRAMEWORK)
 
 $(FRAMEWORK): $(GOSRC)
-	cd ../host && gomobile bind -target ios -iosversion 17.0 -o ../ios/$(FRAMEWORK) ./mobile/awmtunnel
+	cd ../host && go tool gomobile bind -target ios -iosversion 17.0 -o ../ios/$(FRAMEWORK) ./mobile/awmtunnel
 
 ## Seed the local signing config on a fresh checkout, so that generating the
 ## project never fails just because the gitignored file isn't there yet.
