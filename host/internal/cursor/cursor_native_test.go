@@ -36,13 +36,24 @@ func TestMoveMovesRealCursor(t *testing.T) {
 		t.Fatalf("move: %v", err)
 	}
 
-	// CGEventPost is asynchronous, and SendInput queues; give the window
-	// server a moment.
-	time.Sleep(100 * time.Millisecond)
-
-	gotX, gotY, _ := inj.Position()
-	if gotX == startX && gotY == startY {
-		t.Fatalf("cursor did not move: still at (%.0f, %.0f)", startX, startY)
+	// CGEventPost is asynchronous and SendInput queues, so the position is
+	// not updated on return; poll rather than guess a delay.
+	//
+	// If this fails on Windows with the cursor exactly where it started,
+	// check the foreground window before suspecting the injector: an
+	// elevated process, or a game with anti-cheat, makes Windows drop
+	// injected input silently.
+	var gotX, gotY float64
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		gotX, gotY, _ = inj.Position()
+		if gotX != startX || gotY != startY {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cursor did not move: still at (%.0f, %.0f)", startX, startY)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	t.Logf("cursor moved (%.0f,%.0f) -> (%.0f,%.0f) for delta (%d,%d)",
 		startX, startY, gotX, gotY, dx, dy)
