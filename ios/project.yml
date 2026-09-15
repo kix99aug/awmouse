@@ -47,6 +47,14 @@ targets:
     info:
       path: awmouse/Info.plist
       properties:
+        # XcodeGen writes literal "1.0" and "1" here unless told otherwise,
+        # and nothing then reads MARKETING_VERSION or CURRENT_PROJECT_VERSION
+        # — so the build number set above never reached the .ipa, and every
+        # TestFlight upload after the first would collide. Pointing the keys
+        # at the build settings is what makes those settings mean anything.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
