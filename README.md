@@ -20,7 +20,7 @@ working on device.
 | LAN WebSocket transport | working |
 | QR pairing | host renders it; in-app scanner not built (manual entry works) |
 | tailcat transport | not started — deliberately after the input pipeline |
-| Windows injection (`SendInput`, absolute) | builds, needs on-device testing |
+| Windows injection (`SendInput`, absolute) | working — cursor test passes on a 200% display; not yet driven from the phone |
 | Linux injection (`uinput`) | not started |
 | watchOS app | not started |
 
@@ -107,9 +107,11 @@ GOOS=windows GOARCH=amd64 go build -o awmoused.exe ./cmd/awmoused
 ```
 
 Run it from Windows Terminal or PowerShell 7 — the QR code uses Unicode block
-characters that the legacy console may not draw. If the cursor lands at a
-scaled-down position on a high-DPI display, or cannot reach a second monitor,
-that is the DPI-awareness or `VIRTUALDESK` handling and worth reporting.
+characters that the legacy console may not draw. High-DPI is confirmed on a
+single 200% display: the injector sees physical pixels, not the virtualised
+ones a DPI-unaware process gets. Multi-monitor is not yet tried — if the
+cursor cannot reach a second monitor, that is the `VIRTUALDESK` handling and
+worth reporting.
 
 **iOS:**
 
@@ -147,7 +149,8 @@ cd shared/MotionInput && swift test
 ```
 
 `TestMoveMovesRealCursor` moves your actual cursor and puts it back — it is the
-only honest way to check that cgo injection reaches the window server.
+only honest way to check that native injection reaches the window server. It
+runs on macOS and Windows; on Linux there is no injector yet.
 
 The `MotionInput` tests are pure math and need no device. The one that matters
 most is `stillnessProducesNoDrift`: a cursor that wanders while the phone is
