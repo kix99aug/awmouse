@@ -3,9 +3,9 @@
 // render it.
 //
 // Everything that used to live in the daemon's main() is here, plus what a
-// window needs and a terminal never did: a transport that can be swapped while
-// running, settings that change without a restart, and a permission gate that
-// waits instead of exiting.
+// window needs and a terminal never did: settings that change without a
+// restart, a transport that can be restarted, and a permission gate that waits
+// instead of exiting.
 package app
 
 import (
@@ -22,30 +22,18 @@ import (
 	"awmouse/host/internal/transport"
 )
 
-type TransportKind string
-
-const (
-	// TransportLAN is a WebSocket reachable on the local network.
-	TransportLAN TransportKind = "lan"
-	// TransportTunnel is tailcat: reachable from anywhere, end-to-end
-	// encrypted, brokered through a relay until a direct path exists.
-	TransportTunnel TransportKind = "tunnel"
-)
-
+// The one transport is tailcat: end-to-end encrypted, reachable from any
+// network, brokered through a relay only until a direct path exists — which
+// on the same LAN it finds at once, so a separate local-network transport
+// would add a choice without adding a capability.
 type Settings struct {
-	Transport    TransportKind
-	Port         int
 	IdentityPath string // tailcat identity file; empty means the per-user default
 	ScrollGain   float64
 	ScrollInvert bool
 }
 
 func DefaultSettings() Settings {
-	return Settings{
-		Transport:  TransportLAN,
-		Port:       8787,
-		ScrollGain: cursor.DefaultScroll.Gain,
-	}
+	return Settings{ScrollGain: cursor.DefaultScroll.Gain}
 }
 
 type Phase int
@@ -55,15 +43,15 @@ const (
 	// in practice — Accessibility must be granted in System Settings, and the
 	// app keeps checking until it is.
 	PhaseNeedsPermission Phase = iota
-	// PhaseStarting: the transport is coming up. The tunnel takes a second or
-	// two to measure relays; the LAN listener is effectively instant.
+	// PhaseStarting: the tunnel is coming up, which takes a second or two
+	// while the nearest relay is measured.
 	PhaseStarting
 	// PhaseListening: ready, nothing connected.
 	PhaseListening
 	// PhaseConnected: a phone is driving the cursor.
 	PhaseConnected
-	// PhaseFailed: the transport could not start. Error says why. The app
-	// stays up so the user can switch transports or fix the cause.
+	// PhaseFailed: the tunnel could not start. Error says why. The app stays
+	// up so the user can retry once the cause — usually no network — is fixed.
 	PhaseFailed
 )
 
@@ -87,8 +75,7 @@ func (p Phase) String() string {
 // is a secret except Endpoint and Address, which are what the phone needs and
 // which the user is meant to see.
 type Status struct {
-	Phase     Phase
-	Transport TransportKind
+	Phase Phase
 	// Endpoint is the QR payload — the deep link the phone opens.
 	Endpoint string
 	// Address is the human-readable form for typing in by hand.
@@ -106,9 +93,9 @@ type App struct {
 	inj inject.Injector
 	ctl *cursor.Controller
 
-	// The running transport, if any. Swapping transports cancels the old
-	// context and waits on done before starting the next, so two listeners
-	// never fight over a port or an identity file.
+	// The running transport, if any. Restarting cancels the old context and
+	// waits on done before starting again, so two listeners never fight over
+	// the identity file.
 	cancelTransport context.CancelFunc
 	transportDone   chan struct{}
 }
@@ -116,7 +103,7 @@ type App struct {
 func New(s Settings) *App {
 	return &App{
 		settings: s,
-		status:   Status{Phase: PhaseStarting, Transport: s.Transport},
+		status:   Status{Phase: PhaseStarting},
 		subs:     map[chan Status]struct{}{},
 	}
 }
@@ -136,10 +123,9 @@ func (a *App) Run(ctx context.Context) error {
 		Gain:   a.settings.ScrollGain,
 		Invert: a.settings.ScrollInvert,
 	})
-	kind := a.settings.Transport
 	a.mu.Unlock()
 
-	a.startTransport(ctx, kind)
+	a.startTransport(ctx)
 
 	<-ctx.Done()
 	a.stopTransport()
@@ -176,34 +162,32 @@ func (a *App) acquireInjector(ctx context.Context) (inject.Injector, error) {
 	}
 }
 
-// startTransport brings up a transport of the given kind in the background.
-// Must not be called while one is running; use SetTransport for that.
-func (a *App) startTransport(parent context.Context, kind TransportKind) {
+// startTransport brings up the tunnel in the background. Must not be called
+// while one is running; use Restart for that.
+func (a *App) startTransport(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 
 	a.mu.Lock()
 	a.cancelTransport = cancel
 	a.transportDone = done
-	port := a.settings.Port
 	identity := a.settings.IdentityPath
 	a.mu.Unlock()
 
 	a.update(func(s *Status) {
 		s.Phase = PhaseStarting
-		s.Transport = kind
 		s.Endpoint, s.Address, s.Peer, s.Error = "", "", "", ""
 	})
 
 	go func() {
 		defer close(done)
 
-		tr, address, err := open(ctx, kind, port, identity)
+		tr, address, err := open(ctx, identity)
 		if err != nil {
 			if ctx.Err() != nil {
 				return // cancelled mid-start; not a failure worth showing
 			}
-			log.Printf("transport %s: %v", kind, err)
+			log.Printf("tunnel: %v", err)
 			a.update(func(s *Status) {
 				s.Phase = PhaseFailed
 				s.Error = err.Error()
@@ -218,7 +202,7 @@ func (a *App) startTransport(parent context.Context, kind TransportKind) {
 		})
 
 		if err := tr.Run(ctx, &handler{app: a}); err != nil && ctx.Err() == nil {
-			log.Printf("transport %s: %v", kind, err)
+			log.Printf("tunnel: %v", err)
 			a.update(func(s *Status) {
 				s.Phase = PhaseFailed
 				s.Error = err.Error()
@@ -247,33 +231,23 @@ func (a *App) stopTransport() {
 	}
 }
 
-func open(ctx context.Context, kind TransportKind, port int, identityPath string) (transport.Transport, string, error) {
-	switch kind {
-	case TransportLAN:
-		ws := transport.NewWS(port)
-		return ws, ws.URL(), nil
-
-	case TransportTunnel:
-		if identityPath == "" {
-			p, err := transport.DefaultIdentityPath()
-			if err != nil {
-				return nil, "", err
-			}
-			identityPath = p
-		}
-		id, err := transport.LoadOrCreateIdentity(identityPath)
+func open(ctx context.Context, identityPath string) (transport.Transport, string, error) {
+	if identityPath == "" {
+		p, err := transport.DefaultIdentityPath()
 		if err != nil {
 			return nil, "", err
 		}
-		tc, err := transport.NewTailcat(ctx, id, transport.TailcatPort, nil)
-		if err != nil {
-			return nil, "", err
-		}
-		return tc, string(tc.Addr()), nil
-
-	default:
-		return nil, "", fmt.Errorf("unknown transport %q", kind)
+		identityPath = p
 	}
+	id, err := transport.LoadOrCreateIdentity(identityPath)
+	if err != nil {
+		return nil, "", err
+	}
+	tc, err := transport.NewTailcat(ctx, id, transport.TailcatPort, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	return tc, string(tc.Addr()), nil
 }
 
 // MARK: - Settings
@@ -297,24 +271,22 @@ func (a *App) SetScroll(gain float64, invert bool) {
 	}
 }
 
-// SetTransport swaps the running transport, or restarts the current one —
-// which is how a failed tunnel gets retried. The phone will need to pair
-// again, since the address changes, and the status reflects that.
-func (a *App) SetTransport(ctx context.Context, kind TransportKind) {
+// Restart tears the tunnel down and brings it up again — how a start that
+// failed for want of a network gets retried. The identity is the same, so the
+// address is too, and a phone that already paired stays paired.
+func (a *App) Restart(ctx context.Context) {
 	a.mu.Lock()
-	a.settings.Transport = kind
 	ready := a.ctl != nil
 	a.mu.Unlock()
 
 	// Before the injector is acquired there is nothing to restart; Run will
-	// pick up the new setting when it gets there.
+	// bring the tunnel up when it gets there.
 	if !ready {
-		a.update(func(s *Status) { s.Transport = kind })
 		return
 	}
 
 	a.stopTransport()
-	a.startTransport(ctx, kind)
+	a.startTransport(ctx)
 }
 
 // MARK: - Status

@@ -30,13 +30,13 @@ type view struct {
 	copy    *widget.Button
 	hint    *widget.Label
 
-	transport *widget.RadioGroup
 	invert    *widget.Check
 	gain      *widget.Slider
 	gainValue *widget.Label
 
 	permission fyne.CanvasObject
 	failure    *widget.Label
+	retry      *widget.Button
 
 	// Set while render() writes to widgets, so their change callbacks know
 	// the change came from us and not from the user.
@@ -46,11 +46,6 @@ type view struct {
 	// leave it unchanged do not re-encode and flicker the image.
 	codeFor string
 }
-
-const (
-	labelLAN    = "Same Wi-Fi"
-	labelTunnel = "Anywhere"
-)
 
 func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 	v := &view{}
@@ -77,30 +72,11 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 	})
 	v.copy.Importance = widget.LowImportance
 
-	v.hint = widget.NewLabel("Scan with the phone's camera, or paste the address into the app.")
+	v.hint = widget.NewLabel("Scan with the phone's camera, or paste the address into the app. " +
+		"Works from any network — the address is a secret; anyone holding it can move your cursor.")
 	v.hint.Wrapping = fyne.TextWrapWord
 	v.hint.Alignment = fyne.TextAlignCenter
 	v.hint.TextStyle = fyne.TextStyle{Italic: true}
-
-	// MARK: transport
-
-	v.transport = widget.NewRadioGroup([]string{labelLAN, labelTunnel}, func(sel string) {
-		if v.painting {
-			return
-		}
-		kind := app.TransportLAN
-		if sel == labelTunnel {
-			kind = app.TransportTunnel
-		}
-		fa.Preferences().SetString(prefTransport, string(kind))
-		go core.SetTransport(ctx, kind)
-	})
-	v.transport.Horizontal = true
-	v.transport.Required = true
-
-	transportHelp := widget.NewLabel("Same Wi-Fi is direct. Anywhere works from any network through an encrypted tunnel; pairing takes a moment longer.")
-	transportHelp.Wrapping = fyne.TextWrapWord
-	transportHelp.TextStyle = fyne.TextStyle{Italic: true}
 
 	// MARK: scroll
 
@@ -135,20 +111,22 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 	v.failure.Importance = widget.DangerImportance
 	v.failure.Hide()
 
+	// The usual reason the tunnel fails to start is no network yet — a laptop
+	// opened before Wi-Fi reconnected — and the remedy is to try again.
+	v.retry = widget.NewButton("Try again", func() { go core.Restart(ctx) })
+	v.retry.Hide()
+
 	// MARK: assemble
 
 	v.root = container.NewPadded(container.NewVBox(
 		statusLine,
 		v.permission,
 		v.failure,
+		container.NewCenter(v.retry),
 		container.NewCenter(v.code),
 		v.address,
 		container.NewCenter(v.copy),
 		v.hint,
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Connect from", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		v.transport,
-		transportHelp,
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Scrolling", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		v.invert,
@@ -157,11 +135,6 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 
 	// Initial values, from the saved settings.
 	v.painting = true
-	if settings.Transport == app.TransportTunnel {
-		v.transport.SetSelected(labelTunnel)
-	} else {
-		v.transport.SetSelected(labelLAN)
-	}
 	v.invert.SetChecked(settings.ScrollInvert)
 	v.gain.SetValue(settings.ScrollGain)
 	v.painting = false
@@ -189,7 +162,7 @@ func (v *view) render(st app.Status) {
 	case app.PhaseNeedsPermission:
 		tint, text = color.RGBA{R: 0xE8, G: 0x9B, B: 0x1C, A: 0xFF}, "Waiting for permission"
 	case app.PhaseStarting:
-		tint, text = color.Gray{Y: 0x99}, startingText(st.Transport)
+		tint, text = color.Gray{Y: 0x99}, "Finding the nearest relay…"
 	case app.PhaseListening:
 		tint, text = color.RGBA{R: 0x2E, G: 0xB8, B: 0x5C, A: 0xFF}, "Ready — waiting for the phone"
 	case app.PhaseConnected:
@@ -209,11 +182,13 @@ func (v *view) render(st app.Status) {
 		}
 	}
 
-	if st.Phase == app.PhaseFailed && st.Error != "" {
+	if st.Phase == app.PhaseFailed {
 		v.failure.SetText(st.Error)
 		v.failure.Show()
+		v.retry.Show()
 	} else {
 		v.failure.Hide()
+		v.retry.Hide()
 	}
 
 	// The pairing code exists only while there is something to pair with.
@@ -239,19 +214,6 @@ func (v *view) render(st app.Status) {
 		v.address.SetText("")
 		v.copy.Disable()
 	}
-
-	if st.Transport == app.TransportTunnel {
-		v.transport.SetSelected(labelTunnel)
-	} else {
-		v.transport.SetSelected(labelLAN)
-	}
-}
-
-func startingText(kind app.TransportKind) string {
-	if kind == app.TransportTunnel {
-		return "Finding the nearest relay…"
-	}
-	return "Starting…"
 }
 
 // permissionCard explains the one thing macOS requires before the cursor

@@ -1,9 +1,9 @@
 // Package transport carries protocol messages from the phone to the host.
 //
-// The POC uses a plain LAN WebSocket. tailcat replaces it by implementing this
-// same interface, with nothing above this layer changing — deliberately, so the
-// input pipeline and the tailcat/gomobile integration can be debugged as two
-// separate problems rather than one tangled one. See DESIGN.md.
+// The only transport is tailcat. The interface remains because it is what let
+// the input pipeline be built and debugged over a plain WebSocket before the
+// tunnel existed, and because the tests still drive the tunnel through it over
+// a loopback relay. See DESIGN.md.
 package transport
 
 import (
@@ -32,9 +32,9 @@ type Transport interface {
 	// Run blocks serving messages until ctx is cancelled.
 	Run(ctx context.Context, h Handler) error
 
-	// Endpoint is whatever the phone needs in order to connect: a ws:// URL for
-	// the POC, a pairing token once tailcat lands. It gets rendered as the QR
-	// code on the host's terminal.
+	// Endpoint is the deep link the phone opens to connect — the pairing
+	// address wrapped as awmouse://pair?tc=… — and is what the host renders as
+	// its QR code.
 	Endpoint() string
 }
 

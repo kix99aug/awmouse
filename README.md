@@ -7,8 +7,8 @@ run the POC.
 
 ## Status
 
-POC: iPhone touch-trackpad → macOS cursor, over a LAN WebSocket. Confirmed
-working on device.
+iPhone trackpad and air mouse → macOS or Windows cursor, over tailcat.
+Confirmed working on device.
 
 | Piece | State |
 |---|---|
@@ -17,7 +17,6 @@ working on device.
 | iPhone trackpad, full gesture set | working |
 | iPhone air mouse (gyro) | builds, needs on-device testing |
 | Shared `MotionInput` package | working, unit tested |
-| LAN WebSocket transport | working |
 | QR pairing | host renders it; in-app scanner not built (manual entry works) |
 | tailcat transport | host side working, tested over a loopback relay; phone framework written, not yet bound or run on a device |
 | Windows injection (`SendInput`, absolute) | working — cursor test passes on a 200% display; not yet driven from the phone |
@@ -77,7 +76,7 @@ host/                       Go host app (Fyne)
   internal/proto/           wire format
   internal/inject/          absolute cursor injection, per-OS
   internal/cursor/          acceleration curve + position state
-  internal/transport/       Transport interface; LAN WebSocket and tailcat impls
+  internal/transport/       Transport interface; the tailcat impl
   mobile/awmtunnel/         the phone's end of the tailcat pipe, bound with gomobile
 shared/MotionInput/         Swift package — gyro filtering, shared with watchOS later
 ios/
@@ -100,14 +99,15 @@ make run        # just run it, unpackaged
 It lives in the system tray. The window shows a QR code and the address to
 pair with; closing the window hides it, and Quit is in the tray menu.
 
-**Connect from** picks the transport. *Same Wi-Fi* is a direct connection on
-the local network. *Anywhere* runs over tailcat: the address it shows is the
-host's keys plus its relay, so it is a secret — anyone holding it can drive
-the cursor — and it is stable across restarts, because the identity behind
-it is kept in the per-user config directory. Starting takes a second or two
-while the nearest relay is measured. Nothing needs opening in a firewall: the
-relay is only used to find each other, and the traffic moves to a direct path
-once one exists.
+The connection is tailcat, and only tailcat: it works from any network, and
+on the same one it finds a direct path at once, so a separate local-network
+transport would add a choice without adding a capability. The address is
+the host's keys plus its relay, so it is a secret — anyone holding it can
+drive the cursor — and it is stable across restarts, because the identity
+behind it is kept in the per-user config directory. Starting takes a second
+or two while the nearest relay is measured. Nothing needs opening in a
+firewall: the relay is only used to find each other, and the traffic moves
+to a direct path once one exists.
 
 The phone app reaches the tunnel through a Go framework that must be built
 once on the Mac, before the Xcode project will resolve — gomobile is a module
@@ -156,9 +156,8 @@ Run on a real device. The simulator's drag events come from a mouse, which
 tells you nothing about how the trackpad actually feels — which is the only
 question the POC exists to answer.
 
-Enter the address by hand, or scan the QR (it deep-links via
-`awmouse://pair?ws=…` or `?tc=…`). Over `ws://` the phone and computer must
-be on the same network; over tailcat they need not be.
+Paste the address, or scan the QR — it deep-links via `awmouse://pair?tc=…`,
+so the stock Camera app opens the app directly.
 
 ## CI
 

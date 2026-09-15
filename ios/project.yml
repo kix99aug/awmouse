@@ -86,11 +86,6 @@ targets:
         # not a build one.
         ITSAppUsesNonExemptEncryption: false
 
-        # The POC transport is plain wss-less ws:// to a private address, which
-        # App Transport Security blocks by default.
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
-
         # Lets the QR code deep-link straight into the app from the stock
         # Camera app, instead of requiring the in-app scanner first.
         CFBundleURLTypes:

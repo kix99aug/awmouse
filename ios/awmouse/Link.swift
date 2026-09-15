@@ -14,47 +14,29 @@ import Awmtunnel
 // Objective-C header, so it has to be declared.
 extension AwmtunnelSession: @unchecked @retroactive Sendable {}
 
-/// Where the host is. The QR code encodes one of these as a deep link; the
-/// text field accepts either form.
-enum Target: Equatable {
-    /// The POC transport: a plain WebSocket on the local network.
-    case webSocket(URL)
-    /// A tailcat address — the host's keys and relay, base64url. Works from
-    /// any network, and is a secret: whoever holds it can drive the cursor.
-    case tunnel(String)
+/// Where the host is: a tailcat address — the host's keys and relay,
+/// base64url. Works from any network, and finds a direct path on the same one.
+/// It is a secret: whoever holds it can drive the cursor.
+struct Target: Equatable {
+    let address: String
 
-    /// Parses what a user might paste: a `ws://` URL, or a bare `tc…` address.
+    /// Parses what a user might paste: a bare `tc…` address.
     init?(parsing text: String) {
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if s.hasPrefix("tc"), !s.contains("/") {
-            self = .tunnel(s)
-        } else if let url = URL(string: s), url.scheme == "ws" || url.scheme == "wss" {
-            self = .webSocket(url)
-        } else {
-            return nil
-        }
+        guard s.hasPrefix("tc"), !s.contains("/") else { return nil }
+        address = s
     }
 
-    /// Parses the `awmouse://pair?…` deep link the host renders as a QR code.
+    /// Parses the `awmouse://pair?tc=…` deep link the host renders as a QR code.
     init?(pairingLink url: URL) {
         guard url.scheme == "awmouse",
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let tc = items.first(where: { $0.name == "tc" })?.value
         else { return nil }
-        if let tc = items.first(where: { $0.name == "tc" })?.value {
-            self = .tunnel(tc)
-        } else if let ws = items.first(where: { $0.name == "ws" })?.value, let u = URL(string: ws) {
-            self = .webSocket(u)
-        } else {
-            return nil
-        }
+        address = tc
     }
 
-    var text: String {
-        switch self {
-        case .webSocket(let url): return url.absoluteString
-        case .tunnel(let addr): return addr
-        }
-    }
+    var text: String { address }
 }
 
 /// One open connection to the host. `Client` owns exactly one and speaks JSON
@@ -67,58 +49,6 @@ protocol Link: AnyObject {
     func send(_ json: String, done: @escaping @MainActor (Error?) -> Void)
     func close()
 }
-
-// MARK: - WebSocket
-
-/// The POC link, unchanged from before the tunnel existed.
-@MainActor
-final class WebSocketLink: Link {
-    private let task: URLSessionWebSocketTask
-    private let onFailure: @MainActor (Error) -> Void
-
-    /// Opens the socket. `onOpen` fires once the host has answered a ping —
-    /// a WebSocket task otherwise reports failure only on first I/O.
-    init(url: URL,
-         onOpen: @escaping @MainActor () -> Void,
-         onFailure: @escaping @MainActor (Error) -> Void) {
-        self.onFailure = onFailure
-        task = URLSession.shared.webSocketTask(with: url)
-        task.resume()
-
-        task.sendPing { error in
-            Task { @MainActor in
-                if let error { onFailure(error) } else { onOpen() }
-            }
-        }
-        receiveLoop()
-    }
-
-    /// The host sends nothing, but the receive loop is what surfaces a dropped
-    /// or refused connection.
-    private func receiveLoop() {
-        task.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                switch result {
-                case .success: self.receiveLoop()
-                case .failure(let error): self.onFailure(error)
-                }
-            }
-        }
-    }
-
-    func send(_ json: String, done: @escaping @MainActor (Error?) -> Void) {
-        task.send(.string(json)) { error in
-            Task { @MainActor in done(error) }
-        }
-    }
-
-    func close() {
-        task.cancel(with: .goingAway, reason: nil)
-    }
-}
-
-// MARK: - Tunnel
 
 /// The tailcat link, through the Go framework bound from
 /// `host/mobile/awmtunnel`. Every call into Go is made off the main actor:

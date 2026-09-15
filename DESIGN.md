@@ -332,24 +332,33 @@ Curve for the POC — keep it simple and tune later:
 
 ## Pairing — QR on the computer
 
-The host prints a QR code; the phone scans it once. No IP entry, no firewall
-rules, no account (tailcat needs no Tailscale control plane).
+The host window shows a QR code; the phone scans it once. No IP entry, no
+firewall rules, no account — tailcat needs no Tailscale control plane.
 
-- **Render in the terminal** (`mdp/qrterminal`), not a GUI window — an ASCII QR
-  survives SSH and headless hosts, and can still be drawn into a tray-app window
-  later. A GUI-only QR cannot go the other direction.
-- **Encode a deep link**, not a bare token: `awmouse://pair?t=<token>`. Scanning
-  with the stock iOS Camera app then launches the app directly. In-app scanning
-  via `AVCaptureMetadataOutput` is the fallback, not the primary path.
-- **Scan once, not every launch.** The QR token is a short-lived bootstrap
-  credential. On first successful handshake, each side persists the other's peer
-  identity (iOS Keychain / host config file) and subsequent sessions reconnect
-  silently. If the QR were required every time, the product would be unusable.
-- **Expire the token** (~60 s, regenerate on demand). Whoever scans that QR gets
-  mouse control of the machine, so it should not survive a screenshot or a
-  shoulder-surf.
-- The watch has no camera and never pairs independently — it always inherits the
-  phone's connection.
+- **Encode a deep link**, not a bare address: `awmouse://pair?tc=<address>`.
+  Scanning with the stock iOS Camera app then launches the app directly.
+  Pasting the bare address into the app is the fallback.
+- **Scan once, not every launch.** The address is stable across restarts —
+  the identity behind it lives in the host's per-user config directory — and
+  the phone remembers it, so subsequent sessions reconnect without the QR.
+- **The address is the credential, and it does not expire.** It is the host's
+  public key plus its relay; whoever holds it can drive the cursor until the
+  host's identity file is deleted and a new one generated. An earlier draft of
+  this document planned a short-lived bootstrap token that would be exchanged
+  for a persistent peer identity. That would be the stronger design, and it is
+  not what was built: tailcat's own addressing is the pairing, and it was
+  taken as-is. The consequence is that the QR must be treated like a password
+  — not left on a shared screen, not screenshotted into chat — and that
+  revoking a phone means rotating the host identity, which un-pairs every
+  phone. Worth revisiting if the app ever has users who are not also the
+  host's owner.
+- **One transport, tailcat, everywhere.** It finds a direct path on the same
+  LAN as readily as across the internet, so the local-network WebSocket the
+  pipeline was first built over was retired once the tunnel worked: keeping it
+  would have meant a choice in the window that changed nothing the user could
+  feel.
+- The watch has no camera and never pairs independently — it always inherits
+  the phone's connection.
 
 ## Non-goal: standalone watch operation
 

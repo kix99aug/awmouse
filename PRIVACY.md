@@ -33,21 +33,19 @@ developer.
 you are tilting the phone. The raw sensor readings are processed on the phone
 and discarded; only the resulting cursor movement is sent to your computer.
 
-**Local network.** On the same Wi-Fi, the connection goes directly to your
-computer.
-
-**Over the internet.** If you connect from elsewhere, awmouse uses
-[Tailcat](https://tailscale.com/tailcat), which encrypts everything end to end
-with WireGuard® before it leaves the phone. To find your computer, the phone
-briefly contacts one of Tailscale's public relay servers; that server sees your
-IP address and an anonymous public key, cannot read the encrypted traffic, and
-is bypassed once a direct path to your computer is found. Tailscale's own
-handling of relay traffic is described in
+**The connection.** awmouse uses [Tailcat](https://tailscale.com/tailcat),
+which encrypts everything end to end with WireGuard® before it leaves the
+phone. To find your computer, the phone briefly contacts one of Tailscale's
+public relay servers; that server sees your IP address and an anonymous public
+key, cannot read the encrypted traffic, and is bypassed once a direct path to
+your computer is found — which, on the same Wi-Fi, is immediate. Tailscale's
+own handling of relay traffic is described in
 [Tailscale's privacy policy](https://tailscale.com/privacy-policy).
 
 ## Permissions the app asks for
 
-- **Local Network** — to reach your computer on the same Wi-Fi.
+- **Local Network** — to reach your computer directly when it is on the same
+  Wi-Fi, instead of through the relay.
 - **Motion** — to aim the cursor by tilting the phone. Used only in Air Mouse
   mode, only while you hold the screen.
 

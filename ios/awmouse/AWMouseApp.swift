@@ -20,10 +20,9 @@ struct AWMouseApp: App {
         }
     }
 
-    /// Handles `awmouse://pair?tc=…` (tailcat) or `?ws=ws://host:port/ws`
-    /// (LAN), which is what the QR code on the computer encodes. Using a deep
-    /// link rather than a bare address means the stock Camera app can open
-    /// the app directly.
+    /// Handles `awmouse://pair?tc=…`, which is what the QR code on the
+    /// computer encodes. Using a deep link rather than a bare address means the
+    /// stock Camera app can open the app directly.
     private func handlePairingLink(_ url: URL) {
         guard let target = Target(pairingLink: url) else { return }
         client.connect(to: target)

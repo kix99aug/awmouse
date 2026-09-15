@@ -9,13 +9,13 @@ struct ConnectView: View {
             Text("awmouse")
                 .font(.largeTitle.weight(.semibold))
 
-            Text("Run the helper on your computer, then scan its QR code — or "
-                 + "type the address it printed.")
+            Text("Open awmouse on your computer, then scan its QR code — or "
+                 + "paste the address it shows.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            TextField("tc… address, or ws://192.168.1.10:8787/ws", text: $urlText)
+            TextField("tc… address from the computer", text: $urlText)
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

@@ -65,14 +65,12 @@ func main() {
 
 func loadSettings(p fyne.Preferences) app.Settings {
 	s := app.DefaultSettings()
-	s.Transport = app.TransportKind(p.StringWithFallback(prefTransport, string(s.Transport)))
 	s.ScrollGain = p.FloatWithFallback(prefScrollGain, s.ScrollGain)
 	s.ScrollInvert = p.BoolWithFallback(prefScrollInvert, s.ScrollInvert)
 	return s
 }
 
 const (
-	prefTransport    = "transport"
 	prefScrollGain   = "scroll.gain"
 	prefScrollInvert = "scroll.invert"
 )

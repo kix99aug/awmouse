@@ -31,32 +31,23 @@ final class Client: ObservableObject {
         disconnect()
         state = .connecting
 
-        switch target {
-        case .webSocket(let url):
-            link = WebSocketLink(
-                url: url,
-                onOpen: { [weak self] in self?.opened(target) },
-                onFailure: { [weak self] error in self?.failed(error.localizedDescription) })
-
-        case .tunnel(let address):
-            dialGeneration += 1
-            let generation = dialGeneration
-            Task { [weak self] in
-                do {
-                    let l = try await TunnelLink.dial(address: address) { [weak self] reason in
-                        self?.failed("connection closed: " + reason)
-                    }
-                    // The user may have cancelled or retargeted while we
-                    // were dialing.
-                    guard let self, self.dialGeneration == generation,
-                          case .connecting = self.state
-                    else { l.close(); return }
-                    self.link = l
-                    self.opened(target)
-                    self.startPinging(l)
-                } catch {
-                    self?.failed(error.localizedDescription)
+        dialGeneration += 1
+        let generation = dialGeneration
+        Task { [weak self] in
+            do {
+                let l = try await TunnelLink.dial(address: target.address) { [weak self] reason in
+                    self?.failed("connection closed: " + reason)
                 }
+                // The user may have cancelled or retargeted while we were
+                // dialing.
+                guard let self, self.dialGeneration == generation,
+                      case .connecting = self.state
+                else { l.close(); return }
+                self.link = l
+                self.opened(target)
+                self.startPinging(l)
+            } catch {
+                self?.failed(error.localizedDescription)
             }
         }
     }

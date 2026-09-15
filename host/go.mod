@@ -4,7 +4,6 @@ go 1.27.1
 
 require (
 	fyne.io/fyne/v2 v2.8.1
-	github.com/coder/websocket v1.8.15
 	github.com/tailscale/tailcat v0.6.0
 	golang.org/x/sys v0.48.0
 	rsc.io/qr v0.2.0
@@ -39,6 +38,7 @@ require (
 	github.com/aws/smithy-go v1.27.3 // indirect
 	github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02 // indirect
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/creachadair/msync v0.8.1 // indirect
