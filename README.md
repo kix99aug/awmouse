@@ -81,6 +81,7 @@ host/                       Go daemon
 shared/MotionInput/         Swift package — gyro filtering, shared with watchOS later
 ios/
   project.yml               XcodeGen source of truth — edit this, not the .xcodeproj
+  icon.svg                  app icon source — `make icon` rasterises it into the asset catalog
   awmouse/                  SwiftUI client
 ```
 

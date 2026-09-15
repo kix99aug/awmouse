@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    awmouse app icon.
+
+    A phone, tilted the way you hold it to aim, with the pointer it becomes
+    lifted off its screen. The tilt is the whole idea of Air Mouse mode; the
+    pointer is what every mode produces.
+
+    Square and opaque on purpose: Apple applies the rounded mask itself, and
+    App Store Connect rejects icons with an alpha channel. Keep everything that
+    matters inside the central ~80%, since the mask trims the corners.
+
+    Rasterise to 1024×1024 PNG for Assets.xcassets/AppIcon.appiconset.
+  -->
+
+  <defs>
+    <!-- Deep indigo, lit from the top-left so the flat colour has some depth. -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B4290"/>
+      <stop offset="1" stop-color="#22264F"/>
+    </linearGradient>
+
+    <!-- The phone's screen: a faint glow, brighter toward where the pointer leaves it. -->
+    <radialGradient id="screen" cx="0.6" cy="0.35" r="0.8">
+      <stop offset="0" stop-color="#7B84D6" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#4C55A8" stop-opacity="0.25"/>
+    </radialGradient>
+
+    <!--
+      Lifts the pointer off the phone. The classic blur/offset/merge chain
+      rather than feDropShadow, which some renderers (QuickLook among them)
+      leave out entirely. Applied to an unscaled group: filter lengths are in
+      the filtered element's own units, so a blur set inside a scale(400)
+      group would be 400× too wide.
+    -->
+    <filter id="lift" x="-25%" y="-25%" width="150%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="20"/>
+      <feOffset dy="18" result="blurred"/>
+      <feFlood flood-color="#0B0E2A" flood-opacity="0.6"/>
+      <feComposite in2="blurred" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Phone, tilted as if aiming. Rotation is about its own centre. -->
+  <g transform="translate(430 540) rotate(-14)">
+    <!-- Body -->
+    <rect x="-150" y="-300" width="300" height="600" rx="52"
+          fill="#1A1D42" stroke="#9AA2E8" stroke-opacity="0.9" stroke-width="14"/>
+    <!-- Screen -->
+    <rect x="-122" y="-262" width="244" height="524" rx="30" fill="url(#screen)"/>
+    <!-- Motion arcs: the gyro's tilt, drawn as two short strokes off the top edge. -->
+    <path d="M -60 -350 A 210 210 0 0 1 60 -350" fill="none"
+          stroke="#C9CEFF" stroke-opacity="0.85" stroke-width="16" stroke-linecap="round"/>
+    <path d="M -95 -410 A 300 300 0 0 1 95 -410" fill="none"
+          stroke="#C9CEFF" stroke-opacity="0.45" stroke-width="14" stroke-linecap="round"/>
+  </g>
+
+  <!-- The pointer. Classic cursor outline, scaled so it still reads at 60px. -->
+  <g filter="url(#lift)">
+    <g transform="translate(480 320) scale(400)">
+      <path d="M 0 0 L 0 1 L 0.27 0.76 L 0.45 1.10 L 0.60 1.03 L 0.42 0.69 L 0.76 0.69 Z"
+            fill="#FFFFFF" stroke="#1A1D42" stroke-width="0.055" stroke-linejoin="round"/>
+    </g>
+  </g>
+</svg>

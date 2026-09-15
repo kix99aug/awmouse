@@ -8,7 +8,21 @@ GOSRC     := $(shell find ../host/mobile/awmtunnel -name '*.go' -not -name '*_te
 # a local build never reaches TestFlight and has nothing to be unique against.
 export BUILD_NUMBER ?= 1
 
-.PHONY: project open clean tunnel
+ICON_SVG  := icon.svg
+ICON_PNG  := awmouse/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+
+.PHONY: project open clean tunnel icon
+
+## Rasterise icon.svg into the asset catalog. The SVG is the source; edit it,
+## not the PNG. QuickLook renders it, then the alpha channel is stripped,
+## because App Store Connect rejects icons that have one.
+icon: $(ICON_PNG)
+
+$(ICON_PNG): $(ICON_SVG) tools/flatten.swift
+	$(eval TMP := $(shell mktemp -d))
+	qlmanage -t -s 1024 -o $(TMP) $(ICON_SVG) >/dev/null 2>&1
+	swift tools/flatten.swift $(TMP)/$(ICON_SVG).png $@
+	rm -rf $(TMP)
 
 ## Regenerate the Xcode project from project.yml.
 project: $(LOCAL) $(FRAMEWORK)
