@@ -8,6 +8,7 @@ xcuserdata/
 DerivedData/
 
 host/awmoused
+host/awmoused.exe
 
 # Personal signing identity — see ios/Config/Local.xcconfig.example
 ios/Config/Local.xcconfig

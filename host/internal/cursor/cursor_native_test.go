@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin || windows
 
 package cursor
 
@@ -9,8 +9,9 @@ import (
 	"awmouse/host/internal/inject"
 )
 
-// TestMoveMovesRealCursor is the end-to-end check that cgo injection actually
-// reaches the window server. It moves the real cursor, then puts it back.
+// TestMoveMovesRealCursor is the end-to-end check that native injection
+// actually reaches the window server — CGEventPost on macOS, SendInput on
+// Windows. It moves the real cursor, then puts it back.
 func TestMoveMovesRealCursor(t *testing.T) {
 	inj, err := inject.New()
 	if err != nil {
@@ -35,7 +36,8 @@ func TestMoveMovesRealCursor(t *testing.T) {
 		t.Fatalf("move: %v", err)
 	}
 
-	// CGEventPost is asynchronous; give the window server a moment.
+	// CGEventPost is asynchronous, and SendInput queues; give the window
+	// server a moment.
 	time.Sleep(100 * time.Millisecond)
 
 	gotX, gotY, _ := inj.Position()
