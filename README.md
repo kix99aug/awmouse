@@ -174,12 +174,32 @@ phone's tunnel is a gomobile framework.
 |---|---|---|
 | `host` | `go vet`, `go test`, the phone package cross-compiles for iOS and Android | `awmoused` for macOS (arm64, amd64) and Windows |
 | `ios` | the app compiles against the bound framework, unsigned; `MotionInput` tests | `.app` (not installable) |
-| `ios-signed` | manual only — a development build for a registered device | `.ipa` |
+| `ios-signed` | manual only — signs for App Store distribution and uploads to TestFlight | `.ipa`, and a TestFlight build |
 
-`ios-signed` needs an App Store Connect API key added under Codemagic ›
-Teams › Integrations, named `awmouse`, and the phone's UDID registered in
-the developer portal. Signing is applied to the generated project by
-`xcode-project use-profiles`, so `Local.xcconfig` stays empty on CI.
+`ios-signed` is the route onto a phone. It needs, once:
+
+- An App Store Connect API key under Codemagic › Teams › Integrations, named
+  `awmouse`, with the **Admin or App Manager** role — Developer cannot create
+  the distribution certificate.
+- The app record created in App Store Connect (bundle ID
+  `space.keybo.awmouse`). `fetch-signing-files --create` registers the bundle
+  ID in the developer portal, but the App Store Connect record is separate,
+  and the upload fails without it.
+
+Every run that finishes lands a build in TestFlight, available to anyone
+with a role on the app; install it from the TestFlight app on the phone.
+External testers need a `beta_groups` entry in `codemagic.yaml` and pass
+through beta review once.
+
+Build numbers come from Codemagic's `BUILD_NUMBER`, since TestFlight refuses
+an upload it has seen before; locally the Makefile pins it to 1. Signing is
+applied to the generated project by `xcode-project use-profiles`, so
+`Local.xcconfig` stays empty on CI.
+
+The app declares `ITSAppUsesNonExemptEncryption = false`: it uses WireGuard,
+which is standard, published cryptography and therefore exempt from an
+export licence. Without the key each TestFlight build waits at "Missing
+Compliance" for the same answer to be given by hand.
 
 
 ```sh

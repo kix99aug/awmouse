@@ -4,8 +4,9 @@
 #
 # Nothing here is signed by default. `ios` proves the app compiles — the Go
 # bridging and strict concurrency included — and `host` produces runnable
-# daemons. To get an installable .ipa, see the `ios-signed` workflow at the
-# bottom, which needs an App Store Connect key registered in Codemagic first.
+# daemons. To put a build on TestFlight, run the `ios-signed` workflow at the
+# bottom by hand; it needs an App Store Connect key registered in Codemagic
+# and the app record created in App Store Connect first.
 
 definitions:
   triggering: &on_push
@@ -113,10 +114,11 @@ workflows:
   # as needed, and `use-profiles` writes team and profile into the freshly
   # generated project — so Local.xcconfig can stay empty here too.
   ios-signed:
-    name: iOS app (development build)
+    name: iOS app (TestFlight)
     instance_type: mac_mini_m2
     max_build_duration: 60
-    # Manual only: signing assets are not something every push should touch.
+    # Manual only: signing assets are not something every push should touch,
+    # and every run that reaches the end lands a build in TestFlight.
     cache:
       cache_paths:
         - $HOME/go/pkg/mod
@@ -131,7 +133,10 @@ workflows:
     scripts:
       - name: Fetch or create signing files
         script: |
-          app-store-connect fetch-signing-files "space.keybo.awmouse" --type IOS_APP_DEVELOPMENT --platform IOS --certificate-key=@env:CERTIFICATE_PRIVATE_KEY --create
+          # App Store distribution, not development: TestFlight accepts nothing
+          # else. Creating the distribution certificate needs the API key to
+          # hold the Admin or App Manager role — Developer is not enough.
+          app-store-connect fetch-signing-files "space.keybo.awmouse" --type IOS_APP_STORE --platform IOS --certificate-key=@env:CERTIFICATE_PRIVATE_KEY --create
           keychain initialize
           keychain add-certificates
       - *install_go
@@ -150,3 +155,15 @@ workflows:
     artifacts:
       - ios/build/ios/ipa/*.ipa
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      app_store_connect:
+        # Reuses the `awmouse` integration above; no second key to manage.
+        auth: integration
+        # Uploads, waits for App Store Connect to finish processing, then
+        # makes the build available to internal testers — anyone with a role
+        # on the app in App Store Connect. External testers need a named
+        # group here, and their first build goes through beta review:
+        #
+        #   beta_groups:
+        #     - Friends
+        submit_to_testflight: true

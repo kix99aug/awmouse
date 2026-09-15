@@ -32,7 +32,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: space.keybo.awmouse
         MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "1"
+        # TestFlight rejects an upload whose build number it has already seen,
+        # so this must rise on every upload. Codemagic sets BUILD_NUMBER to its
+        # per-app run counter; the Makefile defaults it to 1 for local builds.
+        CURRENT_PROJECT_VERSION: "${BUILD_NUMBER}"
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "6.0"
         # Xcode 26 refuses to resolve a run destination without this; XcodeGen's
@@ -59,6 +62,16 @@ targets:
         NSMotionUsageDescription: >-
           awmouse reads device rotation so you can aim the cursor by tilting
           your phone.
+
+        # Export compliance. The app ships WireGuard (through tailcat), so it
+        # does use encryption; this declares that the encryption is the exempt
+        # kind — standard, published algorithms (ChaCha20-Poly1305, Curve25519)
+        # used for a standard protocol. Without the key, every TestFlight build
+        # sits at "Missing Compliance" until the same question is answered by
+        # hand in App Store Connect. A US-based developer may still owe an
+        # annual self-classification report to BIS; that is a legal question,
+        # not a build one.
+        ITSAppUsesNonExemptEncryption: false
 
         # The POC transport is plain wss-less ws:// to a private address, which
         # App Transport Security blocks by default.

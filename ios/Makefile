@@ -3,6 +3,11 @@ LOCAL     := Config/Local.xcconfig
 FRAMEWORK := Frameworks/Awmtunnel.xcframework
 GOSRC     := $(shell find ../host/mobile/awmtunnel -name '*.go' -not -name '*_test.go') ../host/go.mod
 
+# project.yml reads CURRENT_PROJECT_VERSION from this. Codemagic exports its
+# own per-app counter, which `?=` leaves alone; everywhere else it is 1, since
+# a local build never reaches TestFlight and has nothing to be unique against.
+export BUILD_NUMBER ?= 1
+
 .PHONY: project open clean tunnel
 
 ## Regenerate the Xcode project from project.yml.
