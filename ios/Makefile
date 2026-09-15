@@ -14,8 +14,11 @@ project: $(LOCAL) $(FRAMEWORK)
 ## gitignored; it is ~40 MB of WireGuard and gVisor.
 tunnel: $(FRAMEWORK)
 
+# gomobile finds gobind on PATH rather than through `go tool`, so install it
+# first — without @version, `go install` takes the one pinned in go.mod.
 $(FRAMEWORK): $(GOSRC)
-	cd ../host && go tool gomobile bind -target ios -iosversion 17.0 -o ../ios/$(FRAMEWORK) ./mobile/awmtunnel
+	cd ../host && go install golang.org/x/mobile/cmd/gobind
+	cd ../host && PATH="$$(go env GOPATH)/bin:$$PATH" go tool gomobile bind -target ios -iosversion 17.0 -o ../ios/$(FRAMEWORK) ./mobile/awmtunnel
 
 ## Seed the local signing config on a fresh checkout, so that generating the
 ## project never fails just because the gitignored file isn't there yet.
