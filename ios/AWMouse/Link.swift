@@ -176,7 +176,7 @@ final class TunnelLink: NSObject, Link, @unchecked Sendable {
 /// The phone's tailcat identity, generated once and kept in the Keychain so
 /// the host can recognise the same phone across sessions.
 enum ClientIdentity {
-    private static let service = "com.awmouse.tunnel"
+    private static let service = "space.keybo.awmouse.tunnel"
     private static let account = "client-key"
 
     static var key: String {

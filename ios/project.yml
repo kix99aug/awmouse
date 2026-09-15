@@ -1,6 +1,6 @@
 name: AWMouse
 options:
-  bundleIdPrefix: com.awmouse
+  bundleIdPrefix: space.keybo
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
@@ -30,7 +30,7 @@ targets:
         embed: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.awmouse.AWMouse
+        PRODUCT_BUNDLE_IDENTIFIER: space.keybo.awmouse
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
@@ -68,6 +68,6 @@ targets:
         # Lets the QR code deep-link straight into the app from the stock
         # Camera app, instead of requiring the in-app scanner first.
         CFBundleURLTypes:
-          - CFBundleURLName: com.awmouse.pair
+          - CFBundleURLName: space.keybo.awmouse.pair
             CFBundleURLSchemes:
               - awmouse

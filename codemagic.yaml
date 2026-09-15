@@ -128,7 +128,7 @@ workflows:
       xcode: latest
       ios_signing:
         distribution_type: development
-        bundle_identifier: com.awmouse.AWMouse
+        bundle_identifier: space.keybo.awmouse
     scripts:
       - *install_go
       - name: Install XcodeGen and gomobile
