@@ -164,7 +164,23 @@ Enter the address by hand, or scan the QR (it deep-links via
 `awmouse://pair?ws=…` or `?tc=…`). Over `ws://` the phone and computer must
 be on the same network; over tailcat they need not be.
 
-## Tests
+## CI
+
+`codemagic.yaml` runs on every push to `main` and every PR, on macOS
+runners, since both halves need Xcode: the macOS injector is cgo, and the
+phone's tunnel is a gomobile framework.
+
+| Workflow | What it proves | Output |
+|---|---|---|
+| `host` | `go vet`, `go test`, the phone package cross-compiles for iOS and Android | `awmoused` for macOS (arm64, amd64) and Windows |
+| `ios` | the app compiles against the bound framework, unsigned; `MotionInput` tests | `.app` (not installable) |
+| `ios-signed` | manual only — a development build for a registered device | `.ipa` |
+
+`ios-signed` needs an App Store Connect API key added under Codemagic ›
+Teams › Integrations, named `awmouse`, and the phone's UDID registered in
+the developer portal. Signing is applied to the generated project by
+`xcode-project use-profiles`, so `Local.xcconfig` stays empty on CI.
+
 
 ```sh
 cd host && go test ./...

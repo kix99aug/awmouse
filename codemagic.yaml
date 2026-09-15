@@ -1,0 +1,156 @@
+# Codemagic CI. Two workflows, both on macOS runners because both need Xcode:
+# the host daemon's macOS injector is cgo against CoreGraphics, and the phone
+# app's tunnel is a gomobile framework, which only binds with the iOS SDK.
+#
+# Nothing here is signed by default. `ios` proves the app compiles — the Go
+# bridging and strict concurrency included — and `host` produces runnable
+# daemons. To get an installable .ipa, see the `ios-signed` workflow at the
+# bottom, which needs an App Store Connect key registered in Codemagic first.
+
+definitions:
+  triggering: &on_push
+    events:
+      - push
+      - pull_request
+    branch_patterns:
+      - pattern: main
+        include: true
+        source: true
+    cancel_previous_builds: true
+
+  go_cache: &go_cache
+    cache_paths:
+      - $HOME/go/pkg/mod
+      - $HOME/Library/Caches/go-build
+
+  install_go: &install_go
+    name: Install Go
+    script: |
+      brew install go
+      # go.mod pins a toolchain; GOTOOLCHAIN=auto fetches it if brew's is older.
+      go version
+
+workflows:
+  host:
+    name: Host daemon
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    triggering: *on_push
+    cache: *go_cache
+    environment:
+      xcode: latest
+    scripts:
+      - *install_go
+      - name: Vet and test
+        working_directory: host
+        script: |
+          go vet ./...
+          # The real-cursor test skips itself: CI has no Accessibility grant.
+          # The tailcat tests run a relay on loopback and need no network.
+          go test ./... -count=1
+      - name: Build daemons
+        working_directory: host
+        script: |
+          mkdir -p dist
+          GOARCH=arm64 go build -o dist/awmoused-darwin-arm64 ./cmd/awmoused
+          GOARCH=amd64 go build -o dist/awmoused-darwin-amd64 ./cmd/awmoused
+          # Windows is pure Go (SendInput via LazySystemDLL) and cross-compiles.
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dist/awmoused-windows-amd64.exe ./cmd/awmoused
+          # And the phone package, for both platforms, as a portability check.
+          CGO_ENABLED=0 GOOS=ios GOARCH=arm64 go build ./mobile/...
+          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./mobile/...
+    artifacts:
+      - host/dist/*
+
+  ios:
+    name: iOS app (unsigned)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    triggering: *on_push
+    cache:
+      cache_paths:
+        - $HOME/go/pkg/mod
+        - $HOME/Library/Caches/go-build
+        - $HOME/Library/Caches/org.swift.swiftpm
+    environment:
+      xcode: latest
+    scripts:
+      - *install_go
+      - name: Install XcodeGen and gomobile
+        script: |
+          brew install xcodegen
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          export PATH="$HOME/go/bin:$PATH"
+          gomobile init
+      - name: Test MotionInput
+        working_directory: shared/MotionInput
+        script: swift test
+      - name: Bind the tunnel and generate the project
+        working_directory: ios
+        script: |
+          export PATH="$HOME/go/bin:$PATH"
+          # Seeds Config/Local.xcconfig (empty team) and binds Awmtunnel.xcframework.
+          make project
+      - name: Build for device, unsigned
+        working_directory: ios
+        script: |
+          xcodebuild build \
+            -project AWMouse.xcodeproj \
+            -scheme AWMouse \
+            -destination 'generic/platform=iOS' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty --color || exit ${PIPESTATUS[0]}
+    artifacts:
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+
+  # Produces an installable build. Before this can run:
+  #   1. Codemagic › Teams › Integrations › App Store Connect: add an API key
+  #      and name it "awmouse" (or change `app_store_connect` below).
+  #   2. Register the phone's UDID in the developer portal; a development
+  #      profile only installs on listed devices.
+  # Codemagic then fetches or creates the certificate and profile for the
+  # bundle id, and `use-profiles` writes team and profile into the freshly
+  # generated project — so Local.xcconfig can stay empty here too.
+  ios-signed:
+    name: iOS app (development build)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    # Manual only: signing assets are not something every push should touch.
+    cache:
+      cache_paths:
+        - $HOME/go/pkg/mod
+        - $HOME/Library/Caches/go-build
+        - $HOME/Library/Caches/org.swift.swiftpm
+    integrations:
+      app_store_connect: awmouse
+    environment:
+      xcode: latest
+      ios_signing:
+        distribution_type: development
+        bundle_identifier: com.awmouse.AWMouse
+    scripts:
+      - *install_go
+      - name: Install XcodeGen and gomobile
+        script: |
+          brew install xcodegen
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          export PATH="$HOME/go/bin:$PATH"
+          gomobile init
+      - name: Bind the tunnel and generate the project
+        working_directory: ios
+        script: |
+          export PATH="$HOME/go/bin:$PATH"
+          make project
+      - name: Apply signing to the generated project
+        working_directory: ios
+        script: xcode-project use-profiles
+      - name: Build IPA
+        working_directory: ios
+        script: |
+          xcode-project build-ipa \
+            --project AWMouse.xcodeproj \
+            --scheme AWMouse
+    artifacts:
+      - ios/build/ios/ipa/*.ipa
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
