@@ -14,17 +14,32 @@ import (
 	"awmouse/host/internal/proto"
 )
 
+// Conn is what a Session may do to its own connection: answer, and end it.
+type Conn interface {
+	// Reply writes one message back to the phone. Used once, to answer the
+	// hello; the protocol is otherwise one-way.
+	Reply(proto.Msg) error
+	Close() error
+}
+
+// Handler admits connections. One Handler serves a transport; each accepted
+// connection gets its own Session, which is where per-connection state —
+// whether this phone has proven itself yet — belongs.
 type Handler interface {
-	// OnConnect is called once per accepted connection, before any message.
-	// peer is whatever the transport can say about the other end — an address
-	// for the LAN, a key fingerprint for the tunnel — and is for display only.
-	OnConnect(peer string)
+	// Accept is called once per connection, before any message. peer is the
+	// phone's tailcat address, which is derived from its node key and bound
+	// to it by WireGuard's cryptokey routing — so it identifies the device,
+	// not merely the route. Returning nil refuses the connection.
+	Accept(peer string, c Conn) Session
+}
 
-	OnMessage(proto.Msg)
+type Session interface {
+	// OnMessage handles one message. A non-nil error ends the connection.
+	OnMessage(proto.Msg) error
 
-	// OnDisconnect must be called for every connection that ends, however it
-	// ends. A client lost mid-drag leaves a button held down, and the user has
-	// no working mouse left to recover with.
+	// OnDisconnect must be called for every accepted connection that ends,
+	// however it ends. A client lost mid-drag leaves a button held down, and
+	// the user has no working mouse left to recover with.
 	OnDisconnect()
 }
 
@@ -38,14 +53,15 @@ type Transport interface {
 	Endpoint() string
 }
 
-// dispatch decodes one JSON message and hands it to h. A malformed message is
+// dispatch decodes one JSON message and hands it to s. A malformed message is
 // logged and skipped rather than ending the connection: dropping the link
-// over one bad frame would leave the user with no mouse.
-func dispatch(h Handler, data []byte) {
+// over one bad frame would leave the user with no mouse. The session's own
+// verdict is returned as-is.
+func dispatch(s Session, data []byte) error {
 	var m proto.Msg
 	if err := json.Unmarshal(data, &m); err != nil {
 		log.Printf("bad message: %v", err)
-		return
+		return nil
 	}
-	h.OnMessage(m)
+	return s.OnMessage(m)
 }

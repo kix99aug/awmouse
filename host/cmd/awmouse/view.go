@@ -7,11 +7,13 @@ import (
 	"log"
 	"net/url"
 	"runtime"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"awmouse/host/internal/app"
@@ -22,6 +24,7 @@ import (
 // reads state on its own; follow() feeds it.
 type view struct {
 	root fyne.CanvasObject
+	core *app.App
 
 	dot     *canvas.Circle
 	status  *widget.Label
@@ -29,6 +32,11 @@ type view struct {
 	address *widget.Label
 	copy    *widget.Button
 	hint    *widget.Label
+
+	pin     *widget.Label
+	pinNote *widget.Label
+	devices *fyne.Container
+	devNote *widget.Label
 
 	invert    *widget.Check
 	gain      *widget.Slider
@@ -48,7 +56,7 @@ type view struct {
 }
 
 func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
-	v := &view{}
+	v := &view{core: core}
 	settings := core.Settings()
 
 	// MARK: status line
@@ -72,11 +80,25 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 	})
 	v.copy.Importance = widget.LowImportance
 
-	v.hint = widget.NewLabel("Scan with the phone's camera, or paste the address into the app. " +
-		"Works from any network — the address is a secret; anyone holding it can move your cursor.")
+	v.hint = widget.NewLabel("Scan with the phone's camera, or paste the address into the app and type the code.")
 	v.hint.Wrapping = fyne.TextWrapWord
 	v.hint.Alignment = fyne.TextAlignCenter
 	v.hint.TextStyle = fyne.TextStyle{Italic: true}
+
+	// MARK: pairing code
+
+	v.pin = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true, Bold: true})
+	v.pin.SizeName = theme.SizeNameHeadingText
+	v.pinNote = widget.NewLabel("")
+	v.pinNote.Alignment = fyne.TextAlignCenter
+	v.pinNote.TextStyle = fyne.TextStyle{Italic: true}
+
+	// MARK: paired devices
+
+	v.devices = container.NewVBox()
+	v.devNote = widget.NewLabel("Phones that have paired are let in without a code. Remove one to revoke it — it is dropped at once if connected.")
+	v.devNote.Wrapping = fyne.TextWrapWord
+	v.devNote.TextStyle = fyne.TextStyle{Italic: true}
 
 	// MARK: scroll
 
@@ -127,6 +149,14 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 		v.address,
 		container.NewCenter(v.copy),
 		v.hint,
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Pairing code", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		v.pin,
+		v.pinNote,
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Paired phones", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		v.devices,
+		v.devNote,
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Scrolling", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		v.invert,
@@ -214,6 +244,45 @@ func (v *view) render(st app.Status) {
 		v.address.SetText("")
 		v.copy.Disable()
 	}
+
+	v.renderPairing(st)
+}
+
+func (v *view) renderPairing(st app.Status) {
+	if st.Code == "" {
+		v.pin.SetText("—")
+		v.pinNote.SetText("")
+	} else {
+		// Spaced in threes: six digits read as a code, not a number.
+		v.pin.SetText(st.Code[:3] + "  " + st.Code[3:])
+		left := time.Until(st.CodeExpires).Round(time.Minute)
+		if left < time.Minute {
+			left = time.Minute
+		}
+		v.pinNote.SetText(fmt.Sprintf("New phones only. Changes after each pairing, or in %d min.", int(left.Minutes())))
+	}
+
+	rows := make([]fyne.CanvasObject, 0, len(st.Devices))
+	for _, d := range st.Devices {
+		id := d.ID
+		name := widget.NewLabel(d.Name)
+		when := widget.NewLabel("since " + d.Since.Local().Format("Jan 2"))
+		when.TextStyle = fyne.TextStyle{Italic: true}
+		remove := widget.NewButton("Remove", func() {
+			if err := v.core.Forget(id); err != nil {
+				log.Printf("forget %s: %v", id, err)
+			}
+		})
+		remove.Importance = widget.LowImportance
+		rows = append(rows, container.NewBorder(nil, nil, name, container.NewHBox(when, remove)))
+	}
+	if len(rows) == 0 {
+		empty := widget.NewLabel("None yet.")
+		empty.TextStyle = fyne.TextStyle{Italic: true}
+		rows = append(rows, empty)
+	}
+	v.devices.Objects = rows
+	v.devices.Refresh()
 }
 
 // permissionCard explains the one thing macOS requires before the cursor

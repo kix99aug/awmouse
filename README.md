@@ -101,13 +101,16 @@ pair with; closing the window hides it, and Quit is in the tray menu.
 
 The connection is tailcat, and only tailcat: it works from any network, and
 on the same one it finds a direct path at once, so a separate local-network
-transport would add a choice without adding a capability. The address is
-the host's keys plus its relay, so it is a secret — anyone holding it can
-drive the cursor — and it is stable across restarts, because the identity
-behind it is kept in the per-user config directory. Starting takes a second
-or two while the nearest relay is measured. Nothing needs opening in a
-firewall: the relay is only used to find each other, and the traffic moves
+transport would add a choice without adding a capability. Starting takes a
+second or two while the nearest relay is measured. Nothing needs opening in
+a firewall: the relay is only used to find each other, and the traffic moves
 to a direct path once one exists.
+
+A phone the host has not seen must present the six-digit **pairing code**
+under the QR. Scanning the QR supplies it automatically; pasting the address
+means typing it. The code changes after every pairing and every ten minutes,
+so the address alone — even from an old screenshot of the QR — gets nothing.
+Paired phones are listed in the window; Remove revokes one on the spot.
 
 The phone app reaches the tunnel through a Go framework that must be built
 once on the Mac, before the Xcode project will resolve — gomobile is a module
@@ -156,8 +159,10 @@ Run on a real device. The simulator's drag events come from a mouse, which
 tells you nothing about how the trackpad actually feels — which is the only
 question the POC exists to answer.
 
-Paste the address, or scan the QR — it deep-links via `awmouse://pair?tc=…`,
-so the stock Camera app opens the app directly.
+Paste the address, or scan the QR — it deep-links via
+`awmouse://pair?tc=…&code=…`, so the stock Camera app opens the app directly
+and the phone is admitted without typing. A pasted address is asked for the
+code.
 
 ## CI
 

@@ -3,12 +3,15 @@
 // boundary. It is bound into a framework (see ios/Makefile) and the Swift
 // client calls it in place of a socket.
 //
-// The Swift side keeps building JSON exactly as it does for the WebSocket
-// path; this package only carries the bytes. Nothing here knows the protocol.
+// The Swift side builds the JSON; this package carries the bytes. The one
+// exception is Hello, which knows just enough of the protocol to ask the host
+// to admit this phone and to read its one-line answer.
 package awmtunnel
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -43,6 +46,11 @@ type Session struct {
 	client *tailcat.Client
 	conn   net.Conn
 
+	// The host writes exactly one line, in answer to Hello. watch is the
+	// connection's only reader and hands that line over here; a second
+	// reader would race it for the bytes.
+	lines chan string
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -71,37 +79,94 @@ func Dial(addr, clientKey string, timeoutMillis int64, l Listener) (*Session, er
 		return nil, err
 	}
 
-	s := &Session{client: c, conn: conn}
+	s := &Session{client: c, conn: conn, lines: make(chan string, 1)}
 	go s.watch(l)
 	return s, nil
 }
 
-// watch drains the connection. The host never sends anything, so the first
-// thing read is EOF or an error — either way the tunnel is gone.
+// Hello asks the host to admit this phone. code is the pairing code from the
+// host's QR or window; a phone the host already knows is admitted whatever it
+// sends, so pass whatever is on hand. name is shown in the host's device list.
+//
+// A refusal is a result, not an error: the host answered, and said no, and
+// its reason is one the app can act on — ask for a code, or wait. The error
+// return is for the transport failing to get an answer at all.
+func (s *Session) Hello(code, name string, timeoutMillis int64) (*HelloResult, error) {
+	req, err := json.Marshal(map[string]string{"t": "h", "code": code, "name": name})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Send(string(req)); err != nil {
+		return nil, err
+	}
+
+	select {
+	case line, ok := <-s.lines:
+		if !ok {
+			return nil, errors.New("host closed the connection")
+		}
+		var reply struct {
+			T      string `json:"t"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(line), &reply); err != nil {
+			return nil, fmt.Errorf("host answered with something unreadable: %w", err)
+		}
+		switch reply.T {
+		case "ok":
+			return &HelloResult{Admitted: true}, nil
+		case "no":
+			return &HelloResult{Reason: reply.Reason}, nil
+		default:
+			return nil, fmt.Errorf("host answered %q, expected ok or no", reply.T)
+		}
+	case <-time.After(time.Duration(timeoutMillis) * time.Millisecond):
+		return nil, errors.New("host did not answer")
+	}
+}
+
+// HelloResult is the host's answer. When Admitted is false, Reason says why —
+// one of the Reason* constants, or empty if the host gave none.
+type HelloResult struct {
+	Admitted bool
+	Reason   string
+}
+
+// Reasons the host may give. Duplicated from the host's proto package for
+// the same reason Port is: the framework must not import host internals.
+const (
+	ReasonCode   = "code"
+	ReasonLocked = "locked"
+	ReasonHello  = "hello"
+)
+
 func (s *Session) watch(l Listener) {
-	buf := make([]byte, 256)
-	var err error
-	for {
-		if _, err = s.conn.Read(buf); err != nil {
-			break
+	// Lines are handed to Hello; anything beyond the one the host sends is
+	// dropped, since the protocol is otherwise one-way. Reading is what
+	// notices the connection ending.
+	sc := bufio.NewScanner(s.conn)
+	for sc.Scan() {
+		select {
+		case s.lines <- sc.Text():
+		default:
 		}
 	}
+	err := sc.Err()
+	close(s.lines)
+
 	s.mu.Lock()
 	wasClosed := s.closed
 	s.closed = true
 	s.mu.Unlock()
 	if !wasClosed && l != nil {
-		reason := err.Error()
-		if errors.Is(err, net.ErrClosed) {
-			reason = "closed"
+		reason := "closed"
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			reason = err.Error()
 		}
 		l.OnClosed(reason)
 	}
 }
 
-// Send writes one JSON message. The framing is one message per line, so the
-// message must not contain a newline — Swift's JSONEncoder never emits one
-// unless asked to pretty-print.
 func (s *Session) Send(json string) error {
 	s.mu.Lock()
 	closed := s.closed
@@ -113,11 +178,6 @@ func (s *Session) Send(json string) error {
 	return err
 }
 
-// Ping measures the round trip to the host over the tunnel's discovery
-// channel and returns it in milliseconds. It is also the phone's liveness
-// check: a host that crashed sends no FIN, and a write into the in-process
-// TCP stack succeeds locally whether or not anyone is listening, so Send
-// alone cannot tell a dead host from a quiet one.
 func (s *Session) Ping(timeoutMillis int64) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMillis)*time.Millisecond)
 	defer cancel()
@@ -128,7 +188,6 @@ func (s *Session) Ping(timeoutMillis int64) (int64, error) {
 	return r.Latency.Milliseconds(), nil
 }
 
-// Close tears down the connection and the tunnel behind it.
 func (s *Session) Close() error {
 	s.mu.Lock()
 	if s.closed {

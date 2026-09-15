@@ -1,10 +1,14 @@
 import Foundation
+import UIKit
 
 @MainActor
 final class Client: ObservableObject {
     enum State: Equatable {
         case disconnected
         case connecting
+        /// The host wants the pairing code before it will admit this phone.
+        /// Carries the address so the retry needs only the code.
+        case needsCode(Target)
         case connected
         case failed(String)
     }
@@ -35,7 +39,9 @@ final class Client: ObservableObject {
         let generation = dialGeneration
         Task { [weak self] in
             do {
-                let l = try await TunnelLink.dial(address: target.address) { [weak self] reason in
+                let l = try await TunnelLink.dial(
+                    address: target.address, code: target.code, deviceName: UIDevice.current.name
+                ) { [weak self] reason in
                     self?.failed("connection closed: " + reason)
                 }
                 // The user may have cancelled or retargeted while we were
@@ -46,10 +52,21 @@ final class Client: ObservableObject {
                 self.link = l
                 self.opened(target)
                 self.startPinging(l)
+            } catch PairingError.codeRequired {
+                guard let self, self.dialGeneration == generation else { return }
+                self.state = .needsCode(target)
             } catch {
                 self?.failed(error.localizedDescription)
             }
         }
+    }
+
+    /// Retries with the code the user typed, for a target the host asked
+    /// about.
+    func connect(to target: Target, code: String) {
+        var t = target
+        t.code = code.trimmingCharacters(in: .whitespaces)
+        connect(to: t)
     }
 
     func disconnect() {
@@ -70,7 +87,14 @@ final class Client: ObservableObject {
     }
 
     private func failed(_ message: String) {
-        guard state != .disconnected else { return } // torn down on purpose
+        // Only a live attempt or connection can fail. Anything else — torn
+        // down on purpose, or waiting for a code after the host closed the
+        // refused connection — is a stale callback, and must not overwrite
+        // the state that replaced it.
+        switch state {
+        case .connecting, .connected: break
+        default: return
+        }
         pinger?.cancel()
         pinger = nil
         link = nil

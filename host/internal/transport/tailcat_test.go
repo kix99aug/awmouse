@@ -37,14 +37,18 @@ type recorder struct {
 	disconnected chan struct{}
 }
 
-func (r *recorder) OnMessage(m proto.Msg) {
+// The recorder is its own session: it admits every connection and records
+// what arrives. Pairing is the app's concern, and is tested there.
+func (r *recorder) Accept(string, Conn) Session { return r }
+
+func (r *recorder) OnMessage(m proto.Msg) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.msgs = append(r.msgs, m)
+	return nil
 }
 
-func (r *recorder) OnConnect(string) {}
-func (r *recorder) OnDisconnect()    { close(r.disconnected) }
+func (r *recorder) OnDisconnect() { close(r.disconnected) }
 
 func (r *recorder) count() int {
 	r.mu.Lock()

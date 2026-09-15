@@ -9,6 +9,26 @@ const (
 	KindMove   = "m"
 	KindClick  = "c"
 	KindScroll = "s"
+
+	// KindHello is the phone's first message on every connection. It carries
+	// the pairing code from the QR (or typed in), which the host checks only
+	// for a phone it has not seen before. The host answers with exactly one
+	// KindOK or KindNo; after KindNo it closes the connection. Nothing else
+	// ever flows host→phone.
+	KindHello = "h"
+	KindOK    = "ok"
+	KindNo    = "no"
+)
+
+// Reasons carried by KindNo.
+const (
+	// ReasonCode: the phone is not paired and its code was missing or wrong.
+	// The phone should ask the user for the code shown on the host.
+	ReasonCode = "code"
+	// ReasonLocked: too many wrong codes recently; try again shortly.
+	ReasonLocked = "locked"
+	// ReasonHello: the first message was not a hello.
+	ReasonHello = "hello"
 )
 
 const (
@@ -32,4 +52,11 @@ type Msg struct {
 	// Click.
 	B string `json:"b,omitempty"`
 	D bool   `json:"d,omitempty"`
+
+	// Hello: the pairing code and a display name for the host's device list.
+	Code string `json:"code,omitempty"`
+	Name string `json:"name,omitempty"`
+
+	// No: why.
+	Reason string `json:"reason,omitempty"`
 }

@@ -3,6 +3,7 @@ package transport
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/tailscale/tailcat"
 	"tailscale.com/tailcfg"
+
+	"awmouse/host/internal/proto"
 )
 
 // Tailcat serves the protocol over a tailcat pipe: WireGuard between the two
@@ -122,11 +125,17 @@ func (t *Tailcat) serve(ctx context.Context, c net.Conn, h Handler) {
 	stop := context.AfterFunc(ctx, func() { c.Close() })
 	defer stop()
 
-	log.Printf("client connected: %s", c.RemoteAddr())
-	h.OnConnect(c.RemoteAddr().String())
+	peer := c.RemoteAddr().String()
+	log.Printf("client connected: %s", peer)
+
+	sess := h.Accept(peer, lineConn{c})
+	if sess == nil {
+		log.Printf("client refused: %s", peer)
+		return
+	}
 	defer func() {
-		h.OnDisconnect()
-		log.Printf("client disconnected: %s", c.RemoteAddr())
+		sess.OnDisconnect()
+		log.Printf("client disconnected: %s", peer)
 	}()
 
 	sc := bufio.NewScanner(c)
@@ -135,6 +144,21 @@ func (t *Tailcat) serve(ctx context.Context, c net.Conn, h Handler) {
 		if len(line) == 0 {
 			continue
 		}
-		dispatch(h, line)
+		if err := dispatch(sess, line); err != nil {
+			log.Printf("client %s: %v", peer, err)
+			return
+		}
 	}
+}
+
+// lineConn adapts a net.Conn to the newline-delimited JSON the phone reads.
+type lineConn struct{ net.Conn }
+
+func (l lineConn) Reply(m proto.Msg) error {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	_, err = l.Write(append(b, '\n'))
+	return err
 }

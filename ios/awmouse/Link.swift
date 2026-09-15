@@ -20,6 +20,11 @@ extension AwmtunnelSession: @unchecked @retroactive Sendable {}
 struct Target: Equatable {
     let address: String
 
+    /// The pairing code, if this target came with one. The QR carries the
+    /// current code so a scanned phone is admitted without typing; a pasted
+    /// address has none, and the host will ask for it.
+    var code: String?
+
     /// Parses what a user might paste: a bare `tc…` address.
     init?(parsing text: String) {
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,16 +32,37 @@ struct Target: Equatable {
         address = s
     }
 
-    /// Parses the `awmouse://pair?tc=…` deep link the host renders as a QR code.
+    /// Parses the `awmouse://pair?tc=…&code=…` deep link the host renders as
+    /// a QR code.
     init?(pairingLink url: URL) {
         guard url.scheme == "awmouse",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               let tc = items.first(where: { $0.name == "tc" })?.value
         else { return nil }
         address = tc
+        code = items.first(where: { $0.name == "code" })?.value
     }
 
     var text: String { address }
+}
+
+/// The host declining to admit this phone. Distinct from a transport failure:
+/// the connection worked, and the host said no.
+enum PairingError: LocalizedError, Equatable {
+    /// Not paired, and no code or the wrong one. Ask the user for the code
+    /// shown on the host and try again.
+    case codeRequired
+    /// Too many wrong codes; the host is refusing for a moment.
+    case locked
+    case refused(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .codeRequired: return "Enter the pairing code shown on your computer."
+        case .locked: return "Too many wrong codes — wait a moment and try again."
+        case .refused(let why): return "The computer refused the connection (\(why))."
+        }
+    }
 }
 
 /// One open connection to the host. `Client` owns exactly one and speaks JSON
@@ -62,10 +88,14 @@ final class TunnelLink: NSObject, Link, @unchecked Sendable {
         self.session = session
     }
 
-    /// Dials the host. Bootstrapping goes through the relay before a direct
-    /// path is found, so this can take a few seconds the first time.
-    /// `onClosed` fires if the tunnel ends underneath us.
-    static func dial(address: String,
+    /// Dials the host and asks to be admitted. Bootstrapping goes through the
+    /// relay before a direct path is found, so this can take a few seconds the
+    /// first time. `onClosed` fires if the tunnel ends underneath us.
+    ///
+    /// Throws `PairingError` when the host answers but declines — a phone it
+    /// has not seen must present the code from its window — and other errors
+    /// when there was no answer at all.
+    static func dial(address: String, code: String?, deviceName: String,
                      onClosed: @escaping @MainActor (String) -> Void) async throws -> TunnelLink {
         let listener = ClosedListener(onClosed)
         let key = ClientIdentity.key
@@ -81,6 +111,24 @@ final class TunnelLink: NSObject, Link, @unchecked Sendable {
             return session
         }.value
         guard let session else { throw TunnelError.noSession }
+
+        // A known phone is admitted whatever it sends, so an empty code is
+        // the right thing to send when there is none: it costs nothing when
+        // paired, and elicits the "code required" answer when not.
+        // Read the verdict out inside the task: the result object is a Go
+        // handle Swift cannot see is Sendable, and two plain values are.
+        let (admitted, reason): (Bool, String) = try await Task.detached {
+            let r = try session.hello(code ?? "", name: deviceName, timeoutMillis: 5_000)
+            return (r.admitted, r.reason)
+        }.value
+        if !admitted {
+            _ = try? session.close()
+            switch reason {
+            case AwmtunnelReasonCode: throw PairingError.codeRequired
+            case AwmtunnelReasonLocked: throw PairingError.locked
+            default: throw PairingError.refused(reason)
+            }
+        }
         return TunnelLink(session: session)
     }
 

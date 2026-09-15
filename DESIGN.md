@@ -332,26 +332,43 @@ Curve for the POC — keep it simple and tune later:
 
 ## Pairing — QR on the computer
 
-The host window shows a QR code; the phone scans it once. No IP entry, no
-firewall rules, no account — tailcat needs no Tailscale control plane.
+The host window shows a QR code and, under it, a six-digit pairing code; the
+phone scans once. No IP entry, no firewall rules, no account — tailcat needs
+no Tailscale control plane.
 
-- **Encode a deep link**, not a bare address: `awmouse://pair?tc=<address>`.
-  Scanning with the stock iOS Camera app then launches the app directly.
-  Pasting the bare address into the app is the fallback.
-- **Scan once, not every launch.** The address is stable across restarts —
-  the identity behind it lives in the host's per-user config directory — and
-  the phone remembers it, so subsequent sessions reconnect without the QR.
-- **The address is the credential, and it does not expire.** It is the host's
-  public key plus its relay; whoever holds it can drive the cursor until the
-  host's identity file is deleted and a new one generated. An earlier draft of
-  this document planned a short-lived bootstrap token that would be exchanged
-  for a persistent peer identity. That would be the stronger design, and it is
-  not what was built: tailcat's own addressing is the pairing, and it was
-  taken as-is. The consequence is that the QR must be treated like a password
-  — not left on a shared screen, not screenshotted into chat — and that
-  revoking a phone means rotating the host identity, which un-pairs every
-  phone. Worth revisiting if the app ever has users who are not also the
-  host's owner.
+**Two credentials, doing different jobs.** The tailcat address says *where*
+the host is, and never changes. The pairing code says *this phone may come
+in*, and is spent the moment it does. Holding the address alone gets an
+attacker a WireGuard session and a refusal.
+
+- **Encode a deep link**, not a bare address: `awmouse://pair?tc=<address>&code=<code>`.
+  Scanning with the stock iOS Camera app then launches the app directly and
+  admits it without typing. Pasting the address into the app works too; the
+  host asks for the code, which is why the window shows it.
+- **Hello first.** The phone's first message on every connection is a hello
+  carrying whatever code it has. The host answers exactly once — `ok`, or
+  `no` with a reason — and after `no` it closes the connection. This is the
+  only message that ever flows host→phone; everything else stays one-way.
+- **A phone that has been admitted once is admitted thereafter.** Its identity
+  is its tailcat address, which is derived from its node key and bound to that
+  key by WireGuard's cryptokey routing — a packet from that address came from
+  the holder of that key, or it did not arrive. The host keeps the list beside
+  its own identity, since the two mean nothing apart: rotating the host key
+  changes the address every phone holds and un-pairs them all regardless.
+- **Revocation is per phone.** Removing one from the list drops it at once if
+  it is connected; no other phone notices. This is the property the address
+  alone could never offer.
+- **The code rotates on every admission and every ten minutes**, and five
+  wrong guesses in a row refuse all hellos for thirty seconds. A QR left on a
+  shared screen or in a camera roll is therefore useless within minutes and
+  useless immediately after anyone uses it; a guess at six digits through a
+  redial per attempt is impractical without the lock and pointless with it.
+- **tailcat's own allow-list is not used**, though it exists. Once non-empty
+  it refuses unknown keys at the WireGuard handshake, before any byte of ours
+  runs — which is stronger, and also why it cannot work here: a new phone has
+  to connect in order to present its code. The gate lives one layer up. The
+  cost is that an address-holder can complete a handshake and reach the JSON
+  reader; the reader answers `no` and hangs up.
 - **One transport, tailcat, everywhere.** It finds a direct path on the same
   LAN as readily as across the internet, so the local-network WebSocket the
   pipeline was first built over was retired once the tunnel worked: keeping it

@@ -2,6 +2,7 @@ package awmtunnel_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -34,13 +35,17 @@ type recorder struct {
 	disconnected chan struct{}
 }
 
-func (r *recorder) OnMessage(m proto.Msg) {
+// The recorder is its own session: it admits every connection and records
+// what arrives. Pairing is the app's concern, and is tested there.
+func (r *recorder) Accept(string, transport.Conn) transport.Session { return r }
+
+func (r *recorder) OnMessage(m proto.Msg) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.msgs = append(r.msgs, m)
+	return nil
 }
-func (r *recorder) OnConnect(string) {}
-func (r *recorder) OnDisconnect()    { close(r.disconnected) }
+func (r *recorder) OnDisconnect() { close(r.disconnected) }
 
 type closeWatcher struct{ closed chan string }
 
@@ -118,5 +123,106 @@ func TestPhoneToHost(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Errorf("Close: %v", err)
+	}
+}
+
+// gatekeeper is a host session that answers hellos the way the app does:
+// admit on the right code, refuse with a reason otherwise, and end the
+// connection after a refusal.
+type gatekeeper struct {
+	code     string
+	admitted chan string // name from the admitted hello
+}
+
+func (g *gatekeeper) Accept(_ string, c transport.Conn) transport.Session {
+	return &gateSession{g: g, c: c}
+}
+
+type gateSession struct {
+	g *gatekeeper
+	c transport.Conn
+}
+
+func (s *gateSession) OnMessage(m proto.Msg) error {
+	if m.T != proto.KindHello {
+		return nil
+	}
+	if m.Code != s.g.code {
+		_ = s.c.Reply(proto.Msg{T: proto.KindNo, Reason: proto.ReasonCode})
+		return errors.New("wrong code")
+	}
+	_ = s.c.Reply(proto.Msg{T: proto.KindOK})
+	s.g.admitted <- m.Name
+	return nil
+}
+
+func (s *gateSession) OnDisconnect() {}
+
+// TestHello drives the pairing handshake over the real tunnel: the phone's
+// Hello must read the host's one-line answer, tell admission from refusal,
+// and — since the same reader also watches for the connection ending — the
+// refusal must still surface as a close.
+func TestHello(t *testing.T) {
+	dm := integration.RunDERPAndSTUN(t, func(string, ...any) {}, "127.0.0.1")
+	reg := dm.Regions[1]
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	id := transport.Identity{Key: key.NewNode(), PSK: tailcat.NewPresharedKey()}
+	host, err := transport.NewTailcat(ctx, id, transport.TailcatPort, reg)
+	if err != nil {
+		t.Fatalf("host: %v", err)
+	}
+	gate := &gatekeeper{code: "482913", admitted: make(chan string, 1)}
+	go host.Run(ctx, gate)
+
+	dial := func() (*awmtunnel.Session, *closeWatcher) {
+		w := &closeWatcher{closed: make(chan string, 1)}
+		s, err := awmtunnel.Dial(string(host.Addr()), awmtunnel.NewKey(), 15000, w)
+		if err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+		return s, w
+	}
+
+	// Wrong code: refused, with the reason, and then dropped.
+	s, w := dial()
+	r, err := s.Hello("000000", "Test iPhone", 5000)
+	if err != nil {
+		t.Fatalf("Hello (wrong code) errored instead of answering: %v", err)
+	}
+	if r.Admitted || r.Reason != awmtunnel.ReasonCode {
+		t.Fatalf("wrong code: got %+v, want refused with reason %q", r, awmtunnel.ReasonCode)
+	}
+	select {
+	case <-w.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("host did not close the connection after refusing")
+	}
+	s.Close()
+
+	// Right code: admitted, name delivered, connection stays up.
+	s, w = dial()
+	defer s.Close()
+	r, err = s.Hello("482913", "Test iPhone", 5000)
+	if err != nil {
+		t.Fatalf("Hello (right code): %v", err)
+	}
+	if !r.Admitted {
+		t.Fatalf("right code refused: %+v", r)
+	}
+	select {
+	case name := <-gate.admitted:
+		if name != "Test iPhone" {
+			t.Errorf("host saw name %q", name)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("host never recorded the admission")
+	}
+	select {
+	case reason := <-w.closed:
+		t.Fatalf("connection closed after admission: %s", reason)
+	case <-time.After(300 * time.Millisecond):
 	}
 }

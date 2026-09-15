@@ -25,7 +25,10 @@ func main() {
 	fa := fyneapp.NewWithID(appID)
 	fa.SetIcon(assets.Icon)
 
-	core := app.New(loadSettings(fa.Preferences()))
+	core, err := app.New(loadSettings(fa.Preferences()))
+	if err != nil {
+		log.Fatalf("app: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
