@@ -1,4 +1,4 @@
-PROJECT   := AWMouse.xcodeproj
+PROJECT   := awmouse.xcodeproj
 LOCAL     := Config/Local.xcconfig
 FRAMEWORK := Frameworks/Awmtunnel.xcframework
 GOSRC     := $(shell find ../host/mobile/awmtunnel -name '*.go' -not -name '*_test.go') ../host/go.mod

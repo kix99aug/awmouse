@@ -89,8 +89,8 @@ workflows:
         working_directory: ios
         script: |
           xcodebuild build \
-            -project AWMouse.xcodeproj \
-            -scheme AWMouse \
+            -project awmouse.xcodeproj \
+            -scheme awmouse \
             -destination 'generic/platform=iOS' \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
@@ -98,13 +98,14 @@ workflows:
     artifacts:
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
 
-  # Produces an installable build. Before this can run:
+  # Puts a build on TestFlight. Before this can run:
   #   1. Codemagic › Teams › Integrations › App Store Connect: add an API key
-  #      with the App Manager role (Developer cannot create profiles) and
-  #      name it "awmouse" (or change `app_store_connect` below).
-  #   2. Register the phone's UDID in the developer portal. A development
-  #      profile cannot exist with zero devices, so `--create` fails until
-  #      there is at least one.
+  #      with the Admin or App Manager role — Developer cannot create the
+  #      distribution certificate — and name it "awmouse" (or change
+  #      `app_store_connect` below).
+  #   2. Create the app record in App Store Connect for the bundle id.
+  #      `--create` registers the bundle id in the developer portal, but the
+  #      App Store Connect record is separate, and the upload fails without it.
   #   3. Codemagic › Environment variables: group "signing", variable
   #      CERTIFICATE_PRIVATE_KEY (secure), holding an RSA key made with
   #      `openssl genrsa 2048`. The certificate is issued against this key,
@@ -151,7 +152,7 @@ workflows:
       - name: Build IPA
         working_directory: ios
         script: |
-          xcode-project build-ipa --project AWMouse.xcodeproj --scheme AWMouse
+          xcode-project build-ipa --project awmouse.xcodeproj --scheme awmouse
     artifacts:
       - ios/build/ios/ipa/*.ipa
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM

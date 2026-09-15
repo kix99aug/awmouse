@@ -81,7 +81,7 @@ host/                       Go daemon
 shared/MotionInput/         Swift package — gyro filtering, shared with watchOS later
 ios/
   project.yml               XcodeGen source of truth — edit this, not the .xcodeproj
-  AWMouse/                  SwiftUI client
+  awmouse/                  SwiftUI client
 ```
 
 ## Running

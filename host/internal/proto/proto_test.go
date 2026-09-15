@@ -6,7 +6,7 @@ import (
 )
 
 // The payloads below are what Swift's JSONEncoder emits for the Msg struct in
-// ios/AWMouse/Protocol.swift. A field renamed on one side and not the other
+// ios/awmouse/Protocol.swift. A field renamed on one side and not the other
 // fails silently at runtime — the host would decode a zero value and simply
 // stop moving — so pin the exact shapes here.
 func TestDecodesSwiftPayloads(t *testing.T) {

@@ -1,6 +1,6 @@
 # XcodeGen output — project.yml is the source of truth
-ios/AWMouse.xcodeproj/
-ios/AWMouse/Info.plist
+ios/awmouse.xcodeproj/
+ios/awmouse/Info.plist
 
 # gomobile output — `make tunnel` in ios/ rebuilds it
 ios/Frameworks/

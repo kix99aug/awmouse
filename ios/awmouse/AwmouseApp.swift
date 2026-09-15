@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct AWMouseApp: App {
+struct AwmouseApp: App {
     @StateObject private var client: Client
     @StateObject private var air: AirMouse
 

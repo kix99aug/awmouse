@@ -1,4 +1,4 @@
-name: AWMouse
+name: awmouse
 options:
   bundleIdPrefix: space.keybo
   deploymentTarget:
@@ -18,11 +18,11 @@ packages:
     path: ../shared/MotionInput
 
 targets:
-  AWMouse:
+  awmouse:
     type: application
     platform: iOS
     sources:
-      - AWMouse
+      - awmouse
     dependencies:
       - package: MotionInput
       # The Go tunnel, bound by `make tunnel`. Static, so not embedded.
@@ -45,7 +45,7 @@ targets:
         # simulator is mouse-driven, which tells you nothing about trackpad feel.
         CODE_SIGN_STYLE: Automatic
     info:
-      path: AWMouse/Info.plist
+      path: awmouse/Info.plist
       properties:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
