@@ -1,5 +1,19 @@
 import Foundation
 
+// The Go tunnel, bound by gomobile into Frameworks/Awmtunnel.xcframework. It is
+// an Objective-C module, so its types (AwmtunnelSession, AwmtunnelDial, …) are
+// invisible to Swift without this import — a missing framework fails here with
+// "no such module", which is the cue to run `make tunnel`.
+import Awmtunnel
+
+// gomobile classes are thin handles onto Go objects: each holds a reference
+// number, and every call goes through the Go runtime, which does its own
+// locking. That makes them safe to hand between isolation domains, which
+// TunnelLink relies on — it dials on a detached task and sends on a serial
+// queue, both off the main actor. Swift cannot see any of that through the
+// Objective-C header, so it has to be declared.
+extension AwmtunnelSession: @unchecked @retroactive Sendable {}
+
 /// Where the host is. The QR code encodes one of these as a deep link; the
 /// text field accepts either form.
 enum Target: Equatable {
@@ -126,7 +140,15 @@ final class TunnelLink: NSObject, Link, @unchecked Sendable {
         let listener = ClosedListener(onClosed)
         let key = ClientIdentity.key
         let session: AwmtunnelSession? = try await Task.detached {
-            try AwmtunnelDial(address, key, 15_000, listener)
+            // Dial is a top-level Go function, which gomobile exposes as a C
+            // function rather than an Objective-C method. Swift turns a
+            // trailing NSError** into `throws` only for methods, so here the
+            // error comes back through an explicit out-parameter. The Session
+            // methods below are methods, and do get the `throws` form.
+            var error: NSError?
+            let session = AwmtunnelDial(address, key, 15_000, listener, &error)
+            if let error { throw error }
+            return session
         }.value
         guard let session else { throw TunnelError.noSession }
         return TunnelLink(session: session)
