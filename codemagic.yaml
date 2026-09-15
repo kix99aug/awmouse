@@ -111,6 +111,11 @@ workflows:
   #   2. Register the phone's UDID in the developer portal. A development
   #      profile cannot exist with zero devices, so `--create` fails until
   #      there is at least one.
+  #   3. Codemagic › Environment variables: group "signing", variable
+  #      CERTIFICATE_PRIVATE_KEY (secure), holding an RSA key made with
+  #      `openssl genrsa 2048`. The certificate is issued against this key,
+  #      so it must be the same key every run — a fresh one per build would
+  #      mint a new certificate each time and hit Apple's limit.
   # fetch-signing-files then creates the bundle id, certificate and profile
   # as needed, and `use-profiles` writes team and profile into the freshly
   # generated project — so Local.xcconfig can stay empty here too.
@@ -128,10 +133,12 @@ workflows:
       app_store_connect: awmouse
     environment:
       xcode: latest
+      groups:
+        - signing
     scripts:
       - name: Fetch or create signing files
         script: |
-          app-store-connect fetch-signing-files "space.keybo.awmouse" --type IOS_APP_DEVELOPMENT --platform IOS --create
+          app-store-connect fetch-signing-files "space.keybo.awmouse" --type IOS_APP_DEVELOPMENT --platform IOS --certificate-key=@env:CERTIFICATE_PRIVATE_KEY --create
           keychain initialize
           keychain add-certificates
       - *install_go
