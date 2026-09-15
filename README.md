@@ -71,8 +71,9 @@ adjusts its sensitivity. Pointer feel is `cursor.DefaultCurve` in
 ## Layout
 
 ```
-host/                       Go daemon
-  cmd/awmoused/             entry point, QR display
+host/                       Go host app (Fyne)
+  cmd/awmouse/              the tray app: pairing window, status, settings
+  internal/app/             wires injector, cursor, transport; exposes status
   internal/proto/           wire format
   internal/inject/          absolute cursor injection, per-OS
   internal/cursor/          acceleration curve + position state
@@ -91,24 +92,22 @@ ios/
 
 ```sh
 cd host
-go run ./cmd/awmoused
+make app        # macOS: dist/awmouse.app
+make windows    # Windows: dist/awmouse.exe (needs `brew install mingw-w64` on a Mac)
+make run        # just run it, unpackaged
 ```
 
-It prints a QR code and a `ws://` address, reachable on the local network.
+It lives in the system tray. The window shows a QR code and the address to
+pair with; closing the window hides it, and Quit is in the tray menu.
 
-To work from any network instead, run it over tailcat:
-
-```sh
-go run ./cmd/awmoused -transport tailcat
-```
-
-That prints a `tc…` address in place of the URL. It is the host's keys plus
-its relay, so it is a secret — anyone holding it can drive the cursor — and
-it is stable across restarts, because the identity behind it is kept in the
-per-user config directory (`-identity` overrides the path). Starting takes a
-second or two while the nearest relay is measured. Nothing needs opening in a
-firewall: the relay is only used to find each other, and the traffic moves to
-a direct path once one exists.
+**Connect from** picks the transport. *Same Wi-Fi* is a direct connection on
+the local network. *Anywhere* runs over tailcat: the address it shows is the
+host's keys plus its relay, so it is a secret — anyone holding it can drive
+the cursor — and it is stable across restarts, because the identity behind
+it is kept in the per-user config directory. Starting takes a second or two
+while the nearest relay is measured. Nothing needs opening in a firewall: the
+relay is only used to find each other, and the traffic moves to a direct path
+once one exists.
 
 The phone app reaches the tunnel through a Go framework that must be built
 once on the Mac, before the Xcode project will resolve — gomobile is a module
@@ -118,24 +117,20 @@ tool of `host/go.mod`, so nothing to install beyond Go and Xcode:
 cd ios && make tunnel
 ```
 
-macOS needs Accessibility permission, or `CGEventPost` silently does nothing.
-The grant attaches to the app that owns the process, so when running from a
-shell it is **your terminal** that must be enabled in System Settings › Privacy
-& Security › Accessibility — not the `awmoused` binary.
+**macOS** needs Accessibility permission, or `CGEventPost` silently does
+nothing. The app waits for it and says so; the button in the window opens
+the right pane. This is why the host must be a `.app` bundle: the grant
+attaches to the application that owns the process, and a bare binary
+launched from Finder runs inside Terminal, so it would be Terminal that
+ends up in the list. `make app` produces the bundle; it is unsigned, so the
+first launch is right-click › Open.
 
-**Windows** needs no permission. Build on the machine, or cross-compile from
-anywhere:
-
-```sh
-GOOS=windows GOARCH=amd64 go build -o awmoused.exe ./cmd/awmoused
-```
-
-Run it from Windows Terminal or PowerShell 7 — the QR code uses Unicode block
-characters that the legacy console may not draw. High-DPI is confirmed on a
-single 200% display: the injector sees physical pixels, not the virtualised
-ones a DPI-unaware process gets. Multi-monitor is not yet tried — if the
-cursor cannot reach a second monitor, that is the `VIRTUALDESK` handling and
-worth reporting.
+**Windows** needs no permission. Fyne needs cgo, so building requires a C
+compiler — MSYS2/mingw on Windows itself, or `brew install mingw-w64` to
+cross-compile from a Mac. High-DPI is confirmed on a single 200% display:
+the injector sees physical pixels, not the virtualised ones a DPI-unaware
+process gets. Multi-monitor is not yet tried — if the cursor cannot reach a
+second monitor, that is the `VIRTUALDESK` handling and worth reporting.
 
 **iOS:**
 
@@ -173,7 +168,7 @@ phone's tunnel is a gomobile framework.
 
 | Workflow | What it proves | Output |
 |---|---|---|
-| `host` | `go vet`, `go test`, the phone package cross-compiles for iOS and Android | `awmoused` for macOS (arm64, amd64) and Windows |
+| `host` | `go vet`, `go test`, the phone package cross-compiles for iOS and Android | `awmouse.app` for macOS (zipped) and `awmouse.exe` for Windows |
 | `ios` | the app compiles against the bound framework, unsigned; `MotionInput` tests | `.app` (not installable) |
 | `ios-signed` | manual only — signs for App Store distribution and uploads to TestFlight | `.ipa`, and a TestFlight build |
 

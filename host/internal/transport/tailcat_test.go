@@ -43,7 +43,8 @@ func (r *recorder) OnMessage(m proto.Msg) {
 	r.msgs = append(r.msgs, m)
 }
 
-func (r *recorder) OnDisconnect() { close(r.disconnected) }
+func (r *recorder) OnConnect(string) {}
+func (r *recorder) OnDisconnect()    { close(r.disconnected) }
 
 func (r *recorder) count() int {
 	r.mu.Lock()

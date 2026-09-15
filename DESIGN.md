@@ -20,7 +20,8 @@ Move hand → cursor moves. Tap → left click. Double tap → right click.
 └────────────┬──────────────┘
              │ tailcat pipe — WireGuard encryption, NAT traversal, DERP fallback
              ▼
-┌─ Host daemon (Go) ────────┐
+┌─ Host app (Go, Fyne) ─────┐
+│  tray + pairing window    │
 │  tailcat listener         │
 │  accel curve + cursor pos │   ← owns feel, geometry, state
 │  injector (absolute)      │
@@ -204,9 +205,27 @@ when the strip did nothing but scroll.
 The watch has no touch surface to spare and will need its own answer — holding
 the Digital Crown is the obvious candidate.
 
-### Host daemon
+### Host app
 
-One Go codebase for macOS, Windows, and Linux. Only macOS needs cgo.
+One Go codebase for macOS, Windows, and Linux. It is a Fyne application: a
+tray icon, and one window with the pairing code, connection state, and
+settings. There is no separate command-line daemon — a remote mouse for
+people who are not going to open a terminal has to be something you
+double-click.
+
+Fyne needs cgo on every platform, which changes the build story: the
+injector alone was pure Go on Windows and cross-compiled from anywhere, but
+the GUI needs a C toolchain — mingw-w64 to cross-compile from a Mac, which
+is what CI does. The wiring lives in `internal/app`, kept free of any UI
+import, so the interface is a thin layer that renders a `Status` and pokes
+a handful of setters.
+
+The macOS build must be a `.app` bundle rather than a bare binary. The
+Accessibility grant attaches to the application that owns the process, and
+a bare executable double-clicked in Finder runs inside Terminal — so it is
+Terminal that ends up in the permissions list, and the app appears never to
+be granted anything. The bundle also sets `LSUIElement`: a menu-bar utility
+has no business in the Dock.
 
 ```go
 type Injector interface {
@@ -216,11 +235,14 @@ type Injector interface {
 }
 ```
 
-| Platform | API | cgo |
+| Platform | API | cgo in the injector |
 |---|---|---|
 | macOS | `CGEventCreateMouseEvent` + `CGEventPost` | yes, ~40 lines |
 | Windows | `SendInput`, `MOUSEEVENTF_ABSOLUTE\|MOVE\|VIRTUALDESK` | no (`x/sys/windows`) |
 | Linux | `/dev/uinput` absolute device (`ABS_X`/`ABS_Y`) | no (`bendahl/uinput`) |
+
+(The injectors are what is listed; the Fyne front end needs cgo everywhere
+regardless.)
 
 Platform notes that will otherwise cost an afternoon each:
 
@@ -378,7 +400,7 @@ the same channel.
 Each stage validates the next:
 
 1. **`MotionInput` shared package** — sensor math + protocol types, no I/O.
-2. **iPhone touch-trackpad + host daemon + tailcat pipe + QR pairing** — proves
+2. **iPhone touch-trackpad + host + tailcat pipe + QR pairing** — proves
    the whole path end to end using the easiest, most reliable input source.
 3. **iPhone gyro air-mouse** — exercises the sensor pipeline without needing
    WatchConnectivity yet.

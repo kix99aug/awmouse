@@ -124,6 +124,14 @@ func (c *Controller) Move(dx, dy, dtMS float64) error {
 	return c.inj.MoveTo(c.x, c.y, ax, ay)
 }
 
+// SetScroll replaces the scroll configuration. Safe to call while running;
+// the GUI changes it from a slider.
+func (c *Controller) SetScroll(s ScrollConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.scroll = s
+}
+
 func (c *Controller) Scroll(dx, dy float64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -15,6 +15,11 @@ import (
 )
 
 type Handler interface {
+	// OnConnect is called once per accepted connection, before any message.
+	// peer is whatever the transport can say about the other end — an address
+	// for the LAN, a key fingerprint for the tunnel — and is for display only.
+	OnConnect(peer string)
+
 	OnMessage(proto.Msg)
 
 	// OnDisconnect must be called for every connection that ends, however it

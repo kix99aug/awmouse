@@ -39,7 +39,8 @@ func (r *recorder) OnMessage(m proto.Msg) {
 	defer r.mu.Unlock()
 	r.msgs = append(r.msgs, m)
 }
-func (r *recorder) OnDisconnect() { close(r.disconnected) }
+func (r *recorder) OnConnect(string) {}
+func (r *recorder) OnDisconnect()    { close(r.disconnected) }
 
 type closeWatcher struct{ closed chan string }
 

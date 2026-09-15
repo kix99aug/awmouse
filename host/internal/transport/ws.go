@@ -45,6 +45,7 @@ func (w *WS) Run(ctx context.Context, h Handler) error {
 		defer c.CloseNow()
 
 		log.Printf("client connected: %s", r.RemoteAddr)
+		h.OnConnect(r.RemoteAddr)
 		defer func() {
 			h.OnDisconnect()
 			log.Printf("client disconnected: %s", r.RemoteAddr)

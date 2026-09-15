@@ -123,6 +123,7 @@ func (t *Tailcat) serve(ctx context.Context, c net.Conn, h Handler) {
 	defer stop()
 
 	log.Printf("client connected: %s", c.RemoteAddr())
+	h.OnConnect(c.RemoteAddr().String())
 	defer func() {
 		h.OnDisconnect()
 		log.Printf("client disconnected: %s", c.RemoteAddr())
