@@ -124,9 +124,23 @@ cd ios && make tunnel
 nothing. The app waits for it and says so; the button in the window opens
 the right pane. This is why the host must be a `.app` bundle: the grant
 attaches to the application that owns the process, and a bare binary
-launched from Finder runs inside Terminal, so it would be Terminal that
-ends up in the list. `make app` produces the bundle; it is unsigned, so the
-first launch is right-click › Open.
+launched from Finder runs inside Finder's launcher, so it would be that
+which ends up in the list.
+
+The bundle is ad-hoc signed, not Developer ID signed, so a **downloaded**
+copy is refused by Gatekeeper the first time. Open it once anyway, then go
+to System Settings › Privacy & Security, where an **Open Anyway** button
+now appears for it; or clear the quarantine flag and it opens like any app:
+
+```sh
+xattr -dr com.apple.quarantine ~/Downloads/awmouse.app
+```
+
+If the refusal says the app is *damaged*, the bundle was not sealed —
+that is the pre-signing build; rebuild or re-download. Signing with a
+Developer ID and notarising (`SIGN_IDENTITY=…` in `host/Makefile`, plus
+`notarytool`) would remove the step entirely, and is what a release to
+other people needs.
 
 **Windows** needs no permission. Fyne needs cgo, so building requires a C
 compiler — MSYS2/mingw on Windows itself, or `brew install mingw-w64` to
