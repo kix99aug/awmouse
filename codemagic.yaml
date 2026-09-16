@@ -106,25 +106,37 @@ workflows:
           fi
           echo "signing as: $identity"
 
-          # notarytool wants the API key as a PEM file. The integration hands
-          # it over as an environment variable, and a multi-line secret in an
-          # environment variable tends to arrive with its newlines flattened
-          # to literal backslash-n — which echo writes out verbatim, and which
-          # notarytool then rejects as invalidPEMDocument. printf %b expands
-          # them and leaves real newlines alone; a base64-wrapped key is
-          # decoded instead. Validate before submitting, so a bad key fails
-          # here with the file's shape rather than three steps later.
+          # notarytool wants the API key as a PEM file, and the integration
+          # hands it over as an environment variable whose exact shape has
+          # varied: real newlines, literal backslash-n, header and footer
+          # present or stripped, or the whole thing base64-wrapped. Try each
+          # reading and keep the first that openssl accepts, so the step does
+          # not depend on which one Codemagic happens to use today. If none
+          # works, say what the value looked like — its length and first
+          # twelve characters, which for any of these forms is a constant
+          # header or DER prefix, not key material.
           mkdir -p "$HOME/.private_keys"
           p8="$HOME/.private_keys/AuthKey.p8"
-          case "$APP_STORE_CONNECT_PRIVATE_KEY" in
-            *-----BEGIN*) printf '%b\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$p8" ;;
-            *) printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 --decode > "$p8" ;;
-          esac
-          if ! openssl pkey -in "$p8" -noout 2>/dev/null; then
-            echo "APP_STORE_CONNECT_PRIVATE_KEY did not yield a valid PEM private key"
-            echo "file has $(wc -l < "$p8") lines; starts: $(head -c 27 "$p8")"
+          raw="$APP_STORE_CONNECT_PRIVATE_KEY"
+          valid() { openssl pkey -in "$p8" -noout 2>/dev/null; }
+
+          # 1. As given, with backslash-n expanded.
+          printf '%b\n' "$raw" > "$p8"
+          if ! valid; then
+            # 2. Header and footer missing: it is the bare base64 body.
+            body=$(printf '%b' "$raw" | tr -d '\n\r ' )
+            { echo "-----BEGIN PRIVATE KEY-----"; printf '%s' "$body" | fold -w 64; echo; echo "-----END PRIVATE KEY-----"; } > "$p8"
+          fi
+          if ! valid; then
+            # 3. The PEM itself, base64-wrapped.
+            printf '%s' "$raw" | tr -d '\n\r ' | base64 --decode > "$p8" 2>/dev/null || true
+          fi
+          if ! valid; then
+            echo "APP_STORE_CONNECT_PRIVATE_KEY could not be read as a private key"
+            echo "length=${#raw} first12=$(printf '%s' "$raw" | head -c 12) newlines=$(printf '%s' "$raw" | tr -cd '\n' | wc -c | tr -d ' ') backslashes=$(printf '%s' "$raw" | tr -cd '\\' | wc -c | tr -d ' ')"
             exit 1
           fi
+          echo "API key: valid PEM ($(wc -l < "$p8" | tr -d ' ') lines)"
 
           make app SIGN_IDENTITY="$identity"
           make notarize \
