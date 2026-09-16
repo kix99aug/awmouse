@@ -88,9 +88,11 @@ type Controller struct {
 	held map[inject.Button]bool
 
 	// Motion waiting to be shown, post-acceleration, and the pump that shows
-	// it. interval is an estimate of how far apart deltas arrive.
+	// it. interval is an estimate of how far apart deltas arrive; drainBy is
+	// when everything currently pending should have been shown.
 	pendingX, pendingY float64
 	interval           time.Duration
+	drainBy            time.Time
 	pumping            bool
 	stopped            bool
 }
@@ -155,6 +157,9 @@ func (c *Controller) Move(dx, dy, dtMS float64) error {
 
 	c.pendingX += dx * gain
 	c.pendingY += dy * gain
+	// Everything pending — this delta and whatever was left of earlier ones
+	// — is to be shown by the time the next delta is expected.
+	c.drainBy = now.Add(c.interval)
 
 	if !c.pumping && !c.stopped {
 		c.pumping = true
@@ -177,14 +182,18 @@ func (c *Controller) observeIntervalLocked(gap time.Duration) {
 	c.interval = (c.interval*3 + gap) / 4
 }
 
-// pump drains pending motion in pumpTick steps sized so that what is pending
-// now is shown over about one inter-arrival interval. It exits when there is
-// nothing left, and Move starts a new one when there is.
+// pump drains pending motion in pumpTick steps, linearly, so that it is all
+// shown by drainBy. Linear rather than a fixed fraction per tick: a fixed
+// fraction decays geometrically and never quite finishes, leaving every
+// gesture with a creeping tail — and a test that waits a fixed time to see
+// the whole delta arrive fails on a slow machine. Draining to a deadline
+// finishes exactly, on the tick that reaches it. It exits when nothing is
+// left, and Move starts a new one when there is.
 func (c *Controller) pump() {
 	t := time.NewTicker(pumpTick)
 	defer t.Stop()
 
-	for range t.C {
+	for now := range t.C {
 		c.mu.Lock()
 		if c.stopped {
 			c.pumping = false
@@ -192,12 +201,13 @@ func (c *Controller) pump() {
 			return
 		}
 
-		// Fraction of what's pending to emit this tick. Never more than all
-		// of it, and — once the remainder is below a pixel — all of it, so the
-		// tail does not trickle out in sub-pixel dribbles.
-		frac := float64(pumpTick) / float64(c.interval)
-		if frac > 1 || math.Hypot(c.pendingX, c.pendingY) < 1 {
-			frac = 1
+		// Share of what's pending to emit this tick: this tick's length over
+		// the time left, so the rate is even and the last tick takes the
+		// remainder. A remainder under a pixel goes at once rather than being
+		// spread into sub-pixel dribbles.
+		frac := 1.0
+		if left := c.drainBy.Sub(now); left > pumpTick && math.Hypot(c.pendingX, c.pendingY) >= 1 {
+			frac = float64(pumpTick) / float64(left)
 		}
 		sx, sy := c.pendingX*frac, c.pendingY*frac
 		c.pendingX -= sx

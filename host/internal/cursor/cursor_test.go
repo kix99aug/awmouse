@@ -1,6 +1,7 @@
 package cursor
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -165,8 +166,7 @@ func TestSlowArrivalsAreSpreadIntoManySteps(t *testing.T) {
 	_ = ctl.Move(0, 0, 16)
 	time.Sleep(100 * time.Millisecond)
 	_ = ctl.Move(100, 50, 16)
-
-	time.Sleep(200 * time.Millisecond) // more than one interval; must be drained
+	waitIdle(t, ctl)
 
 	moves := f.movesSnapshot()
 	var sx, sy float64
@@ -180,6 +180,11 @@ func TestSlowArrivalsAreSpreadIntoManySteps(t *testing.T) {
 	}
 	if steps < 5 {
 		t.Fatalf("100px after a 100ms gap was shown in %d step(s); expected many", steps)
+	}
+	// And the last step must not have been a sub-pixel dribble: the tail is
+	// what a geometric drain gets wrong.
+	if last := moves[len(moves)-1]; math.Hypot(last[0], last[1]) < 0.5 {
+		t.Errorf("drain ended in a %.3f px dribble", math.Hypot(last[0], last[1]))
 	}
 	if abs(sx-100) > 1e-6 || abs(sy-50) > 1e-6 {
 		t.Fatalf("motion lost in the pump: total (%.3f, %.3f), want (100, 50)", sx, sy)
@@ -219,7 +224,7 @@ func TestFastArrivalsAreNotDelayed(t *testing.T) {
 		_ = ctl.Move(4, 0, 8)
 		time.Sleep(8 * time.Millisecond)
 	}
-	time.Sleep(20 * time.Millisecond)
+	waitIdle(t, ctl)
 
 	var sx float64
 	for _, m := range f.movesSnapshot() {
@@ -227,6 +232,26 @@ func TestFastArrivalsAreNotDelayed(t *testing.T) {
 	}
 	if abs(sx-20) > 1e-6 {
 		t.Fatalf("fast stream: %.1f of 20 px shown after settling", sx)
+	}
+}
+
+// waitIdle blocks until the pump has drained, or fails the test. Waiting
+// on the pump's own state rather than sleeping a guessed duration is what
+// keeps these tests honest on a loaded CI machine, where ticks arrive late.
+func waitIdle(t *testing.T, ctl *Controller) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		ctl.mu.Lock()
+		idle := !ctl.pumping
+		ctl.mu.Unlock()
+		if idle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("pump never went idle")
+		}
+		time.Sleep(pumpTick)
 	}
 }
 
