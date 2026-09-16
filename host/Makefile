@@ -6,14 +6,24 @@ DIST     := dist
 # fyne's packager is a module tool of go.mod, like gomobile.
 FYNE := go tool fyne
 
-# "-" is ad-hoc: no certificate, no identity, but a proper bundle seal.
+# "-" is ad-hoc: no certificate, no identity, but a proper bundle seal. Set
+# to a "Developer ID Application: …" identity to sign for distribution.
 SIGN_IDENTITY ?= -
+
+# A secure timestamp is required for notarisation and impossible for ad-hoc.
+SIGN_FLAGS := $(if $(filter -,$(SIGN_IDENTITY)),,--timestamp)
+
+# Notarisation credentials: an App Store Connect API key. On Codemagic these
+# come from the app_store_connect integration.
+NOTARY_KEY    ?= $(HOME)/.private_keys/AuthKey.p8
+NOTARY_KEY_ID ?=
+NOTARY_ISSUER ?=
 
 # Strip symbol and DWARF tables. WireGuard, gVisor and Fyne together make a
 # large binary; this takes a third off, and nothing here is debugged with gdb.
 LDFLAGS := -s -w
 
-.PHONY: build run app windows test clean
+.PHONY: build run app zip notarize windows test clean
 
 ## Build the host for this machine.
 build:
@@ -41,9 +51,27 @@ app: build
 	# unidentified-developer refusal, which System Settings can override.
 	# Set SIGN_IDENTITY to a "Developer ID Application" identity to sign for
 	# real; notarisation is still a separate step.
-	codesign --force --deep --sign "$(SIGN_IDENTITY)" \
+	codesign --force --deep --sign "$(SIGN_IDENTITY)" $(SIGN_FLAGS) \
 		--identifier $(APP_ID) --options runtime $(DIST)/awmouse.app
-	@echo "built $(DIST)/awmouse.app"
+	@echo "built $(DIST)/awmouse.app (signed as: $(SIGN_IDENTITY))"
+
+## Zip the bundle. A .app is a directory; ditto keeps the bundle intact.
+zip:
+	rm -f $(DIST)/awmouse-macos.zip
+	cd $(DIST) && ditto -c -k --keepParent awmouse.app awmouse-macos.zip
+
+## Notarise and staple. Only meaningful after `make app` with a Developer ID
+## identity: Apple's service rejects ad-hoc signatures outright. Stapling
+## attaches the ticket to the bundle so Gatekeeper can verify it offline;
+## the zip is then remade around the stapled bundle.
+notarize: zip
+	xcrun notarytool submit $(DIST)/awmouse-macos.zip \
+		--key "$(NOTARY_KEY)" --key-id "$(NOTARY_KEY_ID)" --issuer "$(NOTARY_ISSUER)" \
+		--wait --timeout 20m
+	xcrun stapler staple $(DIST)/awmouse.app
+	$(MAKE) zip
+	# What a downloaded copy will face: this must say accepted.
+	spctl --assess --type execute -v $(DIST)/awmouse.app
 
 ## Windows, cross-compiled from macOS. Fyne needs cgo, so this needs a C
 ## cross-compiler: `brew install mingw-w64`. -H=windowsgui keeps a console

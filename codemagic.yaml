@@ -35,11 +35,31 @@ workflows:
   host:
     name: Host app
     instance_type: mac_mini_m2
-    max_build_duration: 40
-    triggering: *on_push
+    max_build_duration: 60
+    # Every push builds and ad-hoc signs. A v* tag additionally signs with
+    # the Developer ID certificate and notarises, so the artifact opens on
+    # anyone's Mac without a Gatekeeper override.
+    triggering:
+      events:
+        - push
+        - pull_request
+        - tag
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
+      cancel_previous_builds: true
     cache: *go_cache
+    # The App Store Connect key doubles as the notarisation credential.
+    integrations:
+      app_store_connect: awmouse
     environment:
       xcode: latest
+      groups:
+        - signing
     scripts:
       - *install_go
       - name: Install the Windows cross-compiler
@@ -56,9 +76,43 @@ workflows:
       - name: Package for macOS
         working_directory: host
         script: |
-          make app
-          # A .app is a directory; zip it so it survives as one artifact.
-          cd dist && ditto -c -k --keepParent awmouse.app awmouse-macos.zip
+          if [ -z "${CM_TAG:-}" ] || [ -z "${DEVELOPER_ID_P12:-}" ]; then
+            # Not a release, or no certificate on hand: ad-hoc. Opens after a
+            # Gatekeeper override; fine for testers, not for strangers.
+            make app zip
+            exit 0
+          fi
+
+          # Release: sign with the Developer ID certificate and notarise.
+          #
+          # The certificate is a .p12 exported once from Xcode and stored,
+          # base64-encoded, as the secure variable DEVELOPER_ID_P12 (with its
+          # password in DEVELOPER_ID_P12_PASSWORD) in the "signing" group.
+          # Developer ID certificates can only be created by the account
+          # holder, and not through the API, so this one step is manual.
+          echo "$DEVELOPER_ID_P12" | base64 --decode > /tmp/devid.p12
+          keychain initialize
+          keychain add-certificates --certificate /tmp/devid.p12 \
+            --certificate-password "@env:DEVELOPER_ID_P12_PASSWORD"
+          rm /tmp/devid.p12
+
+          identity=$(security find-identity -v -p codesigning \
+            | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
+          if [ -z "$identity" ]; then
+            echo "DEVELOPER_ID_P12 imported, but no 'Developer ID Application' identity found"
+            exit 1
+          fi
+          echo "signing as: $identity"
+
+          # notarytool wants the API key as a file.
+          mkdir -p "$HOME/.private_keys"
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > "$HOME/.private_keys/AuthKey.p8"
+
+          make app SIGN_IDENTITY="$identity"
+          make notarize \
+            NOTARY_KEY="$HOME/.private_keys/AuthKey.p8" \
+            NOTARY_KEY_ID="$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            NOTARY_ISSUER="$APP_STORE_CONNECT_ISSUER_ID"
       - name: Cross-compile for Windows
         working_directory: host
         script: make windows

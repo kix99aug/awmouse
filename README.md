@@ -137,10 +137,25 @@ xattr -dr com.apple.quarantine ~/Downloads/awmouse.app
 ```
 
 If the refusal says the app is *damaged*, the bundle was not sealed —
-that is the pre-signing build; rebuild or re-download. Signing with a
-Developer ID and notarising (`SIGN_IDENTITY=…` in `host/Makefile`, plus
-`notarytool`) would remove the step entirely, and is what a release to
-other people needs.
+that is the pre-signing build; rebuild or re-download.
+
+**Release builds are signed and notarised**, and open on any Mac with no
+override: the `host` workflow does this on a `v*` tag, when the `signing`
+variable group holds a Developer ID certificate. One-time setup, because
+Developer ID certificates can only be created by the account holder and
+not through the API:
+
+1. Xcode › Settings › Accounts › your team › **Manage Certificates…** › **+**
+   › **Developer ID Application**.
+2. Keychain Access › My Certificates › right-click the new
+   "Developer ID Application: …" › **Export…** as `.p12` with a password.
+3. Codemagic › Environment variables › group `signing`:
+   `DEVELOPER_ID_P12` = `base64 -i devid.p12 | pbcopy` (secure), and
+   `DEVELOPER_ID_P12_PASSWORD` (secure).
+
+Notarisation uses the same App Store Connect key as TestFlight. Locally,
+`make app SIGN_IDENTITY="Developer ID Application: …"` then
+`make notarize NOTARY_KEY=… NOTARY_KEY_ID=… NOTARY_ISSUER=…` does the same.
 
 **Windows** needs no permission. Fyne needs cgo, so building requires a C
 compiler — MSYS2/mingw on Windows itself, or `brew install mingw-w64` to
