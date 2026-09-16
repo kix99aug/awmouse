@@ -173,7 +173,7 @@ phone's tunnel is a gomobile framework.
 |---|---|---|
 | `host` | `go vet`, `go test`, the phone package cross-compiles for iOS and Android | `awmouse.app` for macOS (zipped) and `awmouse.exe` for Windows |
 | `ios` | the app compiles against the bound framework, unsigned; `MotionInput` tests | `.app` (not installable) |
-| `ios-signed` | manual only — signs for App Store distribution and uploads to TestFlight | `.ipa`, and a TestFlight build |
+| `ios-signed` | on a `v*` tag, or by hand — signs for App Store distribution and uploads to TestFlight | `.ipa`, and a TestFlight build |
 
 `ios-signed` is the route onto a phone. It needs, once:
 
@@ -187,6 +187,16 @@ phone's tunnel is a gomobile framework.
 
 Every run that finishes lands a build in TestFlight, available to anyone
 with a role on the app; install it from the TestFlight app on the phone.
+
+To release: set `MARKETING_VERSION` in `ios/project.yml` (and `VERSION` in
+`host/Makefile` to match), commit, then
+
+```sh
+git tag v0.2 && git push --tags
+```
+
+The tag starts `ios-signed` on its own. Its first step refuses a tag that
+disagrees with the project version, so a tag cannot ship the wrong number.
 External testers need a `beta_groups` entry in `codemagic.yaml` and pass
 through beta review once.
 

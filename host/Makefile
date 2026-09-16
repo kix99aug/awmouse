@@ -1,5 +1,5 @@
 APP_ID   := space.keybo.awmouse.host
-VERSION  := 0.1
+VERSION  := 0.2
 ICON     := ../ios/awmouse/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 DIST     := dist
 

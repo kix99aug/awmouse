@@ -126,8 +126,18 @@ workflows:
     name: iOS app (TestFlight)
     instance_type: mac_mini_m2
     max_build_duration: 60
-    # Manual only: signing assets are not something every push should touch,
-    # and every run that reaches the end lands a build in TestFlight.
+    # Runs on a version tag, or by hand. Not on push: signing assets are not
+    # something every commit should touch, and every run that reaches the end
+    # lands a build in TestFlight. A release is `git tag v0.2 && git push
+    # --tags`, after MARKETING_VERSION in ios/project.yml says 0.2 — the
+    # first step refuses a tag that disagrees with the project.
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
+      cancel_previous_builds: false
     cache:
       cache_paths:
         - $HOME/go/pkg/mod
@@ -140,6 +150,17 @@ workflows:
       groups:
         - signing
     scripts:
+      - name: Check the tag matches the project version
+        script: |
+          # Only on tag builds; a manual run has no tag to check.
+          if [ -z "${CM_TAG:-}" ]; then echo "manual run; skipping"; exit 0; fi
+          version=$(sed -n 's/.*MARKETING_VERSION: "\(.*\)".*/\1/p' ios/project.yml | head -1)
+          if [ "v$version" != "$CM_TAG" ]; then
+            echo "tag $CM_TAG does not match MARKETING_VERSION $version in ios/project.yml"
+            echo "bump the project version first, then tag"
+            exit 1
+          fi
+          echo "releasing $version"
       - name: Fetch or create signing files
         script: |
           # App Store distribution, not development: TestFlight accepts nothing
