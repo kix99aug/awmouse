@@ -154,9 +154,17 @@ not through the API:
    `DEVELOPER_ID_P12` = `base64 -i devid.p12 | pbcopy` (secure), and
    `DEVELOPER_ID_P12_PASSWORD` (secure).
 
-Notarisation uses the same App Store Connect key as TestFlight. Locally,
-`make app SIGN_IDENTITY="Developer ID Application: …"` then
-`make notarize NOTARY_KEY=… NOTARY_KEY_ID=… NOTARY_ISSUER=…` does the same.
+Notarisation uses the same App Store Connect key as TestFlight. To do it
+locally, store the key once — `xcrun notarytool store-credentials awmouse
+--key AuthKey_XXXX.p8 --key-id XXXX --issuer <issuer id>` — then:
+
+```sh
+make app SIGN_IDENTITY="Developer ID Application: …"
+make notarize NOTARY_PROFILE=awmouse
+```
+
+The last line of `make notarize` is Gatekeeper's own verdict on the result
+and must read `accepted` / `source=Notarized Developer ID`.
 
 **Windows** needs no permission. Fyne needs cgo, so building requires a C
 compiler — MSYS2/mingw on Windows itself, or `brew install mingw-w64` to

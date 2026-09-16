@@ -120,8 +120,15 @@ workflows:
           raw="$APP_STORE_CONNECT_PRIVATE_KEY"
           valid() { openssl pkey -in "$p8" -noout 2>/dev/null; }
 
-          # 1. As given, with backslash-n expanded.
-          printf '%b\n' "$raw" > "$p8"
+          # 0. A reference, not the key: the integration writes the key to
+          #    disk and hands over "@file:/path" (or "@env:NAME") in the
+          #    codemagic-cli-tools convention. Follow it.
+          case "$raw" in
+            @file:*) cp "${raw#@file:}" "$p8" ;;
+            @env:*)  raw=$(printenv "${raw#@env:}") ; printf '%b\n' "$raw" > "$p8" ;;
+            *)       printf '%b\n' "$raw" > "$p8" ;;
+          esac
+          # 1. (fallthrough) As given, with backslash-n expanded — done above.
           if ! valid; then
             # 2. Header and footer missing: it is the bare base64 body.
             body=$(printf '%b' "$raw" | tr -d '\n\r ' )

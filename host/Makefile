@@ -13,11 +13,15 @@ SIGN_IDENTITY ?= -
 # A secure timestamp is required for notarisation and impossible for ad-hoc.
 SIGN_FLAGS := $(if $(filter -,$(SIGN_IDENTITY)),,--timestamp)
 
-# Notarisation credentials: an App Store Connect API key. On Codemagic these
-# come from the app_store_connect integration.
-NOTARY_KEY    ?= $(HOME)/.private_keys/AuthKey.p8
-NOTARY_KEY_ID ?=
-NOTARY_ISSUER ?=
+# Notarisation credentials: an App Store Connect API key, either as a
+# notarytool keychain profile (`xcrun notarytool store-credentials <name>`
+# once, then NOTARY_PROFILE=<name>) or as the key file plus its IDs. On
+# Codemagic the latter come from the app_store_connect integration.
+NOTARY_PROFILE ?=
+NOTARY_KEY     ?= $(HOME)/.private_keys/AuthKey.p8
+NOTARY_KEY_ID  ?=
+NOTARY_ISSUER  ?=
+NOTARY_AUTH := $(if $(NOTARY_PROFILE),--keychain-profile "$(NOTARY_PROFILE)",--key "$(NOTARY_KEY)" --key-id "$(NOTARY_KEY_ID)" --issuer "$(NOTARY_ISSUER)")
 
 # Strip symbol and DWARF tables. WireGuard, gVisor and Fyne together make a
 # large binary; this takes a third off, and nothing here is debugged with gdb.
@@ -65,9 +69,7 @@ zip:
 ## attaches the ticket to the bundle so Gatekeeper can verify it offline;
 ## the zip is then remade around the stapled bundle.
 notarize: zip
-	xcrun notarytool submit $(DIST)/awmouse-macos.zip \
-		--key "$(NOTARY_KEY)" --key-id "$(NOTARY_KEY_ID)" --issuer "$(NOTARY_ISSUER)" \
-		--wait --timeout 20m
+	xcrun notarytool submit $(DIST)/awmouse-macos.zip $(NOTARY_AUTH) --wait --timeout 20m
 	xcrun stapler staple $(DIST)/awmouse.app
 	$(MAKE) zip
 	# What a downloaded copy will face: this must say accepted.
