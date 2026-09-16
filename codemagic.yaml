@@ -106,9 +106,25 @@ workflows:
           fi
           echo "signing as: $identity"
 
-          # notarytool wants the API key as a file.
+          # notarytool wants the API key as a PEM file. The integration hands
+          # it over as an environment variable, and a multi-line secret in an
+          # environment variable tends to arrive with its newlines flattened
+          # to literal backslash-n — which echo writes out verbatim, and which
+          # notarytool then rejects as invalidPEMDocument. printf %b expands
+          # them and leaves real newlines alone; a base64-wrapped key is
+          # decoded instead. Validate before submitting, so a bad key fails
+          # here with the file's shape rather than three steps later.
           mkdir -p "$HOME/.private_keys"
-          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > "$HOME/.private_keys/AuthKey.p8"
+          p8="$HOME/.private_keys/AuthKey.p8"
+          case "$APP_STORE_CONNECT_PRIVATE_KEY" in
+            *-----BEGIN*) printf '%b\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$p8" ;;
+            *) printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 --decode > "$p8" ;;
+          esac
+          if ! openssl pkey -in "$p8" -noout 2>/dev/null; then
+            echo "APP_STORE_CONNECT_PRIVATE_KEY did not yield a valid PEM private key"
+            echo "file has $(wc -l < "$p8") lines; starts: $(head -c 27 "$p8")"
+            exit 1
+          fi
 
           make app SIGN_IDENTITY="$identity"
           make notarize \
