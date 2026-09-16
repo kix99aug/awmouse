@@ -166,6 +166,12 @@ func (a *App) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 	a.stopTransport()
+	a.mu.Lock()
+	ctl := a.ctl
+	a.mu.Unlock()
+	if ctl != nil {
+		ctl.Stop()
+	}
 	return nil
 }
 

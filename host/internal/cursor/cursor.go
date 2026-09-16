@@ -6,6 +6,7 @@
 package cursor
 
 import (
+	"log"
 	"math"
 	"sync"
 	"time"
@@ -46,6 +47,29 @@ var DefaultScroll = ScrollConfig{Gain: 1.6, Invert: false}
 // would otherwise make the next gesture jump.
 const resyncAfter = 500 * time.Millisecond
 
+// Motion is not applied as it arrives. Each delta is added to a pending
+// amount, and a pump drains that amount over roughly the interval at which
+// deltas have been arriving, in steps of pumpTick. A delta that arrives
+// after a 100 ms gap therefore becomes ~25 small moves over the next 100 ms
+// rather than one jump — which is the difference between a cursor that
+// glides and one that stutters when the network bunches messages up.
+//
+// The cost is up to one inter-arrival interval of latency, and the motion
+// starts on the first tick, so the felt lag is a fraction of that. On a fast
+// link the interval is at or below the display's refresh period and the pump
+// is close to transparent.
+const (
+	// pumpTick is finer than any display refresh, and no finer: below ~4 ms
+	// the extra events are never seen, only posted.
+	pumpTick = 4 * time.Millisecond
+
+	// intervalDefault is the assumed arrival rate before any is measured, and
+	// what a gap longer than intervalMax resets to — a pause is not a rate.
+	intervalDefault = 16 * time.Millisecond
+	intervalMin     = pumpTick
+	intervalMax     = 250 * time.Millisecond
+)
+
 type Controller struct {
 	mu     sync.Mutex
 	inj    inject.Injector
@@ -62,14 +86,22 @@ type Controller struct {
 	scrollAccX, scrollAccY float64
 
 	held map[inject.Button]bool
+
+	// Motion waiting to be shown, post-acceleration, and the pump that shows
+	// it. interval is an estimate of how far apart deltas arrive.
+	pendingX, pendingY float64
+	interval           time.Duration
+	pumping            bool
+	stopped            bool
 }
 
 func New(inj inject.Injector, c Curve, s ScrollConfig) *Controller {
 	ctl := &Controller{
-		inj:    inj,
-		curve:  c,
-		scroll: s,
-		held:   map[inject.Button]bool{},
+		inj:      inj,
+		curve:    c,
+		scroll:   s,
+		held:     map[inject.Button]bool{},
+		interval: intervalDefault,
 	}
 	ctl.mu.Lock()
 	ctl.resyncLocked()
@@ -92,8 +124,9 @@ func (c *Controller) resyncLocked() {
 	c.y = clamp(c.y, c.minY, c.maxY)
 }
 
-// Move applies one raw delta. dtMS is the interval the phone measured for this
-// sample; it drives the speed term of the curve.
+// Move accepts one raw delta. dtMS is the interval the phone measured for
+// this sample; it drives the speed term of the curve. The accelerated result
+// is queued for the pump rather than applied here.
 func (c *Controller) Move(dx, dy, dtMS float64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -103,6 +136,9 @@ func (c *Controller) Move(dx, dy, dtMS float64) error {
 	// drifted anyway while we hold the button.
 	if len(c.held) == 0 && now.Sub(c.last) > resyncAfter {
 		c.resyncLocked()
+	}
+	if !c.last.IsZero() {
+		c.observeIntervalLocked(now.Sub(c.last))
 	}
 	c.last = now
 
@@ -117,11 +153,98 @@ func (c *Controller) Move(dx, dy, dtMS float64) error {
 	speed := math.Hypot(dx, dy) / dt
 	gain := clamp(c.curve.Base+c.curve.K*math.Pow(speed, c.curve.P), c.curve.Min, c.curve.Max)
 
-	ax, ay := dx*gain, dy*gain
-	c.x = clamp(c.x+ax, c.minX, c.maxX)
-	c.y = clamp(c.y+ay, c.minY, c.maxY)
+	c.pendingX += dx * gain
+	c.pendingY += dy * gain
 
-	return c.inj.MoveTo(c.x, c.y, ax, ay)
+	if !c.pumping && !c.stopped {
+		c.pumping = true
+		go c.pump()
+	}
+	return nil
+}
+
+// observeIntervalLocked folds one inter-arrival gap into the estimate. An
+// exponential average tracks a changing rate without reacting to every
+// jittered packet; a gap past intervalMax is a pause, not data, and resets.
+func (c *Controller) observeIntervalLocked(gap time.Duration) {
+	if gap > intervalMax {
+		c.interval = intervalDefault
+		return
+	}
+	if gap < intervalMin {
+		gap = intervalMin
+	}
+	c.interval = (c.interval*3 + gap) / 4
+}
+
+// pump drains pending motion in pumpTick steps sized so that what is pending
+// now is shown over about one inter-arrival interval. It exits when there is
+// nothing left, and Move starts a new one when there is.
+func (c *Controller) pump() {
+	t := time.NewTicker(pumpTick)
+	defer t.Stop()
+
+	for range t.C {
+		c.mu.Lock()
+		if c.stopped {
+			c.pumping = false
+			c.mu.Unlock()
+			return
+		}
+
+		// Fraction of what's pending to emit this tick. Never more than all
+		// of it, and — once the remainder is below a pixel — all of it, so the
+		// tail does not trickle out in sub-pixel dribbles.
+		frac := float64(pumpTick) / float64(c.interval)
+		if frac > 1 || math.Hypot(c.pendingX, c.pendingY) < 1 {
+			frac = 1
+		}
+		sx, sy := c.pendingX*frac, c.pendingY*frac
+		c.pendingX -= sx
+		c.pendingY -= sy
+
+		nx := clamp(c.x+sx, c.minX, c.maxX)
+		ny := clamp(c.y+sy, c.minY, c.maxY)
+		// Motion clamped away at a screen edge is gone, not saved up; a cursor
+		// that finally leaves the edge should not lurch by what it couldn't
+		// show earlier.
+		c.x, c.y = nx, ny
+		err := c.inj.MoveTo(c.x, c.y, sx, sy)
+
+		done := c.pendingX == 0 && c.pendingY == 0
+		if done {
+			c.pumping = false
+		}
+		c.mu.Unlock()
+
+		if err != nil {
+			log.Printf("move: %v", err)
+		}
+		if done {
+			return
+		}
+	}
+}
+
+// flushLocked applies all pending motion at once. The pump, if running, will
+// find nothing left and exit on its next tick.
+func (c *Controller) flushLocked() error {
+	if c.pendingX == 0 && c.pendingY == 0 {
+		return nil
+	}
+	sx, sy := c.pendingX, c.pendingY
+	c.pendingX, c.pendingY = 0, 0
+	c.x = clamp(c.x+sx, c.minX, c.maxX)
+	c.y = clamp(c.y+sy, c.minY, c.maxY)
+	return c.inj.MoveTo(c.x, c.y, sx, sy)
+}
+
+// Stop ends the pump and discards pending motion. For shutdown and tests.
+func (c *Controller) Stop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopped = true
+	c.pendingX, c.pendingY = 0, 0
 }
 
 // SetScroll replaces the scroll configuration. Safe to call while running;
@@ -158,6 +281,13 @@ func (c *Controller) Scroll(dx, dy float64) error {
 func (c *Controller) Button(b inject.Button, down bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// A click lands where the cursor is, not where it is heading. Show
+	// whatever motion is still pending first, or the press falls short of
+	// the target by however much the pump had left to play.
+	if err := c.flushLocked(); err != nil {
+		return err
+	}
 
 	if down {
 		c.held[b] = true

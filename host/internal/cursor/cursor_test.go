@@ -1,12 +1,16 @@
 package cursor
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"awmouse/host/internal/inject"
 )
 
 type fakeInjector struct {
+	mu      sync.Mutex
+	moves   [][2]float64 // dx, dy per MoveTo
 	scrolls [][2]float64
 	buttons []struct {
 		b    inject.Button
@@ -19,7 +23,18 @@ func newFake() *fakeInjector {
 	return &fakeInjector{held: map[inject.Button]bool{}}
 }
 
-func (f *fakeInjector) MoveTo(x, y, dx, dy float64) error { return nil }
+func (f *fakeInjector) MoveTo(x, y, dx, dy float64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.moves = append(f.moves, [2]float64{dx, dy})
+	return nil
+}
+
+func (f *fakeInjector) movesSnapshot() [][2]float64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][2]float64(nil), f.moves...)
+}
 func (f *fakeInjector) Scroll(dx, dy float64) error {
 	f.scrolls = append(f.scrolls, [2]float64{dx, dy})
 	return nil
@@ -135,4 +150,89 @@ func TestReleaseAllIsNoOpWhenNothingHeld(t *testing.T) {
 	if len(f.buttons) != 0 {
 		t.Errorf("unexpected button events: %v", f.buttons)
 	}
+}
+
+// A delta that arrives after a long gap must be shown as many small moves
+// over a comparable span, not as one jump — that is the whole point of the
+// pump. And every pixel of it must arrive.
+func TestSlowArrivalsAreSpreadIntoManySteps(t *testing.T) {
+	f := newFake()
+	ctl := New(f, Curve{Base: 1, K: 0, P: 1, Min: 1, Max: 1}, DefaultScroll) // unity gain
+	defer ctl.Stop()
+
+	// Two arrivals 100 ms apart teach the controller the rate; the second
+	// carries the motion under test.
+	_ = ctl.Move(0, 0, 16)
+	time.Sleep(100 * time.Millisecond)
+	_ = ctl.Move(100, 50, 16)
+
+	time.Sleep(200 * time.Millisecond) // more than one interval; must be drained
+
+	moves := f.movesSnapshot()
+	var sx, sy float64
+	steps := 0
+	for _, m := range moves {
+		sx += m[0]
+		sy += m[1]
+		if m[0] != 0 || m[1] != 0 {
+			steps++
+		}
+	}
+	if steps < 5 {
+		t.Fatalf("100px after a 100ms gap was shown in %d step(s); expected many", steps)
+	}
+	if abs(sx-100) > 1e-6 || abs(sy-50) > 1e-6 {
+		t.Fatalf("motion lost in the pump: total (%.3f, %.3f), want (100, 50)", sx, sy)
+	}
+}
+
+// A click must land where the motion was going, not where the pump had got
+// to: pending motion is flushed before the button goes down.
+func TestButtonFlushesPendingMotion(t *testing.T) {
+	f := newFake()
+	ctl := New(f, Curve{Base: 1, K: 0, P: 1, Min: 1, Max: 1}, DefaultScroll)
+	defer ctl.Stop()
+
+	_ = ctl.Move(0, 0, 16)
+	time.Sleep(100 * time.Millisecond)
+	_ = ctl.Move(80, 0, 16) // will take ~100 ms to play out
+	_ = ctl.Button(inject.ButtonLeft, true)
+
+	// Immediately after the press, all 80px must already have been shown.
+	var sx float64
+	for _, m := range f.movesSnapshot() {
+		sx += m[0]
+	}
+	if abs(sx-80) > 1e-6 {
+		t.Fatalf("press went down with %.1f of 80 px shown", sx)
+	}
+}
+
+// Fast arrivals must not be held back: at the display's own rate the pump
+// should drain each delta within a tick or two.
+func TestFastArrivalsAreNotDelayed(t *testing.T) {
+	f := newFake()
+	ctl := New(f, Curve{Base: 1, K: 0, P: 1, Min: 1, Max: 1}, DefaultScroll)
+	defer ctl.Stop()
+
+	for range 5 {
+		_ = ctl.Move(4, 0, 8)
+		time.Sleep(8 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	var sx float64
+	for _, m := range f.movesSnapshot() {
+		sx += m[0]
+	}
+	if abs(sx-20) > 1e-6 {
+		t.Fatalf("fast stream: %.1f of 20 px shown after settling", sx)
+	}
+}
+
+func abs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

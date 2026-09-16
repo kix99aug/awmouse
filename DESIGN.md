@@ -330,6 +330,30 @@ Consequences:
 Curve for the POC — keep it simple and tune later:
 `gain = clamp(base + k·speed^p, min, max)`, with `speed = |delta| / dt`.
 
+**Motion is not applied as it arrives.** Each accelerated delta is added to a
+pending amount, and a pump drains that amount in 4 ms steps sized so that
+what is pending is shown over roughly one inter-arrival interval — an
+exponential estimate of how far apart deltas have been landing. A delta that
+arrives after a 100 ms gap therefore becomes ~25 small moves over the next
+100 ms rather than one jump. This is what makes the cursor glide when the
+network bunches messages up, which tailcat across the internet does; on a fast
+link the interval is at or below the display's refresh period and the pump is
+close to transparent.
+
+Two details are not optional. The steps are 4 ms and not finer, because no
+display samples the cursor faster than that and events posted between
+refreshes are only ever posted, never seen. And the size of each step comes
+from the *estimated* interval, not from a fixed slice count: cutting a delta
+into N pieces to play over the last interval assumes the next arrival is the
+same distance away, and when it is not, motion either piles up or has to be
+skipped — which is the jump the pump exists to remove. Draining pending
+motion at a rate never does either.
+
+The cost is up to one interval of latency, with motion starting on the first
+tick so the felt lag is a fraction of that. A click flushes whatever is still
+pending before the button goes down, or the press would land short of where
+the motion was heading by however much the pump had left to play.
+
 ## Pairing — QR on the computer
 
 The host window shows a QR code and nothing else about the connection; the
