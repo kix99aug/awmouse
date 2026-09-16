@@ -139,9 +139,10 @@ xattr -dr com.apple.quarantine ~/Downloads/awmouse.app
 If the refusal says the app is *damaged*, the bundle was not sealed —
 that is the pre-signing build; rebuild or re-download.
 
-**Release builds are signed and notarised**, and open on any Mac with no
-override: the `host` workflow does this on a `v*` tag, when the `signing`
-variable group holds a Developer ID certificate. One-time setup, because
+**CI builds are signed and notarised**, and open on any Mac with no
+override: the `host` workflow does this on every build once the `signing`
+variable group holds a Developer ID certificate, and falls back to ad-hoc
+until then. One-time setup, because
 Developer ID certificates can only be created by the account holder and
 not through the API:
 
