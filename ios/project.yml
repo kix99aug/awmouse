@@ -70,6 +70,11 @@ targets:
           awmouse connects to the helper running on your computer to move its
           cursor.
 
+        # The QR on the computer is the only way to pair.
+        NSCameraUsageDescription: >-
+          awmouse scans the QR code shown by awmouse on your computer to pair
+          with it.
+
         # Raw gyroscope access through CMMotionManager works without this, but
         # Apple asks for it wherever motion data is read and review expects it.
         NSMotionUsageDescription: >-

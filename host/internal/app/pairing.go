@@ -26,7 +26,13 @@ type Device struct {
 const (
 	// codeTTL bounds how long a QR code that has been photographed stays
 	// useful. Every successful pairing also rotates the code immediately.
-	codeTTL = 10 * time.Minute
+	codeTTL = 60 * time.Second
+
+	// codeGrace keeps the previous code valid briefly after rotation. A phone
+	// scans, then spends a few seconds bootstrapping the tunnel; landing on
+	// the wrong side of a rotation in that gap must not send the user back
+	// to the QR.
+	codeGrace = 15 * time.Second
 
 	// After this many wrong codes in a row, hellos are refused for lockFor.
 	// With a six-digit code and a redial per attempt this already makes
@@ -45,6 +51,10 @@ type pairing struct {
 	code   string
 	issued time.Time
 
+	// The code before this one, honoured until previousUntil.
+	previous      string
+	previousUntil time.Time
+
 	devices map[string]Device
 	path    string
 
@@ -57,7 +67,7 @@ func newPairing(path string) (*pairing, error) {
 	if err := p.load(); err != nil {
 		return nil, err
 	}
-	p.rotateLocked()
+	p.rotateLocked(false)
 	return p, nil
 }
 
@@ -67,12 +77,20 @@ func (p *pairing) Code() (code string, expires time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if time.Since(p.issued) > codeTTL {
-		p.rotateLocked()
+		p.rotateLocked(true)
 	}
 	return p.code, p.issued.Add(codeTTL)
 }
 
-func (p *pairing) rotateLocked() {
+// rotateLocked replaces the code. The old one stays valid for codeGrace when
+// it expired naturally — a scan in flight may still carry it — but not when
+// it was just spent on an admission: a used code is done.
+func (p *pairing) rotateLocked(graceful bool) {
+	if graceful && p.code != "" {
+		p.previous, p.previousUntil = p.code, time.Now().Add(codeGrace)
+	} else {
+		p.previous, p.previousUntil = "", time.Time{}
+	}
 	// Six digits, uniform. crypto/rand rather than math/rand: this is the
 	// credential.
 	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
@@ -81,6 +99,16 @@ func (p *pairing) rotateLocked() {
 	}
 	p.code = fmt.Sprintf("%06d", n.Int64())
 	p.issued = time.Now()
+}
+
+func (p *pairing) acceptsLocked(code string) bool {
+	if code == "" {
+		return false
+	}
+	if code == p.code {
+		return true
+	}
+	return code == p.previous && time.Now().Before(p.previousUntil)
 }
 
 func (p *pairing) IsPaired(id string) bool {
@@ -101,9 +129,9 @@ func (p *pairing) Try(id, name, code string) error {
 		return errLocked
 	}
 	if time.Since(p.issued) > codeTTL {
-		p.rotateLocked()
+		p.rotateLocked(true)
 	}
-	if code == "" || code != p.code {
+	if !p.acceptsLocked(code) {
 		p.failures++
 		if p.failures >= lockAfter {
 			p.failures = 0
@@ -117,7 +145,7 @@ func (p *pairing) Try(id, name, code string) error {
 		name = "Phone"
 	}
 	p.devices[id] = Device{ID: id, Name: name, Since: time.Now()}
-	p.rotateLocked()
+	p.rotateLocked(false)
 	return p.saveLocked()
 }
 

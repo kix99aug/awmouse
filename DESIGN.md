@@ -332,9 +332,10 @@ Curve for the POC — keep it simple and tune later:
 
 ## Pairing — QR on the computer
 
-The host window shows a QR code and, under it, a six-digit pairing code; the
-phone scans once. No IP entry, no firewall rules, no account — tailcat needs
-no Tailscale control plane.
+The host window shows a QR code and nothing else about the connection; the
+phone scans it with its own camera. No address to paste, no code to type, no
+IP entry, no firewall rules, no account — tailcat needs no Tailscale control
+plane.
 
 **Two credentials, doing different jobs.** The tailcat address says *where*
 the host is, and never changes. The pairing code says *this phone may come
@@ -342,9 +343,10 @@ in*, and is spent the moment it does. Holding the address alone gets an
 attacker a WireGuard session and a refusal.
 
 - **Encode a deep link**, not a bare address: `awmouse://pair?tc=<address>&code=<code>`.
-  Scanning with the stock iOS Camera app then launches the app directly and
-  admits it without typing. Pasting the address into the app works too; the
-  host asks for the code, which is why the window shows it.
+  The app's own scanner reads it, and so does the stock Camera app, which
+  then launches the app. There is deliberately no way to type either half:
+  the address is long and the code is short-lived, and a text field would
+  put the secret on screen for no gain.
 - **Hello first.** The phone's first message on every connection is a hello
   carrying whatever code it has. The host answers exactly once — `ok`, or
   `no` with a reason — and after `no` it closes the connection. This is the
@@ -358,11 +360,22 @@ attacker a WireGuard session and a refusal.
 - **Revocation is per phone.** Removing one from the list drops it at once if
   it is connected; no other phone notices. This is the property the address
   alone could never offer.
-- **The code rotates on every admission and every ten minutes**, and five
+- **The code rotates on every admission and every sixty seconds**, and five
   wrong guesses in a row refuse all hellos for thirty seconds. A QR left on a
-  shared screen or in a camera roll is therefore useless within minutes and
+  shared screen or in a camera roll is therefore useless within a minute and
   useless immediately after anyone uses it; a guess at six digits through a
   redial per attempt is impractical without the lock and pointless with it.
+  The window counts down under the QR so the change reads as design, not as
+  a glitch.
+- **The previous code stays good for fifteen seconds after a natural
+  rotation.** A phone scans, then spends a few seconds bringing the tunnel
+  up; landing on the wrong side of the minute in that gap must not send the
+  user back to the screen. A code that was *spent* on an admission gets no
+  such grace — the QR it came from may still be in view.
+- **A paired phone reconnects on launch.** It remembers the address, and a
+  known phone is admitted whatever code it sends, so opening the app
+  reconnects to the last computer with no QR at all. The scan is for the
+  first time, and for a new computer.
 - **tailcat's own allow-list is not used**, though it exists. Once non-empty
   it refuses unknown keys at the WireGuard handshake, before any byte of ours
   runs — which is stronger, and also why it cannot work here: a new phone has

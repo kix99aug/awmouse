@@ -132,3 +132,49 @@ func TestExpiredCodeIsReplacedWhenRead(t *testing.T) {
 		t.Fatal("expired code was shown again")
 	}
 }
+
+// A phone scans, then spends seconds bringing the tunnel up. If the code
+// rotates in that gap the scan must still land — for a little while.
+func TestCodeThatJustExpiredStillAdmitsBriefly(t *testing.T) {
+	p := newTestPairing(t)
+	scanned, _ := p.Code()
+
+	p.mu.Lock()
+	p.issued = time.Now().Add(-codeTTL - time.Second)
+	p.mu.Unlock()
+	_, _ = p.Code() // rotates; `scanned` is now the previous code
+
+	if err := p.Try("phone-a", "", scanned); err != nil {
+		t.Fatalf("code in flight across a rotation was refused: %v", err)
+	}
+}
+
+func TestGraceIsShort(t *testing.T) {
+	p := newTestPairing(t)
+	scanned, _ := p.Code()
+
+	p.mu.Lock()
+	p.issued = time.Now().Add(-codeTTL - time.Second)
+	p.mu.Unlock()
+	_, _ = p.Code()
+	p.mu.Lock()
+	p.previousUntil = time.Now().Add(-time.Second) // grace elapsed
+	p.mu.Unlock()
+
+	if err := p.Try("phone-a", "", scanned); err == nil {
+		t.Fatal("stale code admitted after the grace period")
+	}
+}
+
+// Grace applies to natural expiry only. A code that admitted a phone is
+// spent; the QR it came from may still be on someone's screen.
+func TestSpentCodeGetsNoGrace(t *testing.T) {
+	p := newTestPairing(t)
+	code, _ := p.Code()
+	if err := p.Try("phone-a", "", code); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Try("phone-b", "", code); err == nil {
+		t.Fatal("spent code admitted a second phone within what would be the grace window")
+	}
+}

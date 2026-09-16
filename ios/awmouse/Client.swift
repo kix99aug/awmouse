@@ -6,15 +6,18 @@ final class Client: ObservableObject {
     enum State: Equatable {
         case disconnected
         case connecting
-        /// The host wants the pairing code before it will admit this phone.
-        /// Carries the address so the retry needs only the code.
-        case needsCode(Target)
+        /// The host did not know this phone and the code it sent was stale
+        /// or spent. The QR is the only source of codes, so: scan again.
+        case needsRescan
         case connected
         case failed(String)
     }
 
     @Published private(set) var state: State = .disconnected
-    @Published private(set) var lastTarget: String = UserDefaults.standard.string(forKey: "lastURL") ?? ""
+    /// The computer this phone last connected to. Once paired, reconnecting
+    /// needs no code, so the app can do it on launch without asking.
+    @Published private(set) var lastTarget: Target? = UserDefaults.standard.string(forKey: "lastURL")
+        .flatMap { Target(address: $0) }
 
     private var link: Link?
     private var pinger: Task<Void, Never>?
@@ -54,19 +57,11 @@ final class Client: ObservableObject {
                 self.startPinging(l)
             } catch PairingError.codeRequired {
                 guard let self, self.dialGeneration == generation else { return }
-                self.state = .needsCode(target)
+                self.state = .needsRescan
             } catch {
                 self?.failed(error.localizedDescription)
             }
         }
-    }
-
-    /// Retries with the code the user typed, for a target the host asked
-    /// about.
-    func connect(to target: Target, code: String) {
-        var t = target
-        t.code = code.trimmingCharacters(in: .whitespaces)
-        connect(to: t)
     }
 
     func disconnect() {
@@ -82,8 +77,9 @@ final class Client: ObservableObject {
 
     private func opened(_ target: Target) {
         state = .connected
-        lastTarget = target.text
-        UserDefaults.standard.set(target.text, forKey: "lastURL")
+        // Remember the address only: the code was single-use.
+        lastTarget = Target(address: target.address)
+        UserDefaults.standard.set(target.address, forKey: "lastURL")
     }
 
     private func failed(_ message: String) {

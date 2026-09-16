@@ -25,11 +25,10 @@ struct Target: Equatable {
     /// address has none, and the host will ask for it.
     var code: String?
 
-    /// Parses what a user might paste: a bare `tc…` address.
-    init?(parsing text: String) {
-        let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard s.hasPrefix("tc"), !s.contains("/") else { return nil }
-        address = s
+    /// A remembered address, with no code: for reconnecting as a phone the
+    /// host already knows.
+    init(address: String) {
+        self.address = address
     }
 
     /// Parses the `awmouse://pair?tc=…&code=…` deep link the host renders as
@@ -43,7 +42,6 @@ struct Target: Equatable {
         code = items.first(where: { $0.name == "code" })?.value
     }
 
-    var text: String { address }
 }
 
 /// The host declining to admit this phone. Distinct from a transport failure:

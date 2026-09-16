@@ -13,7 +13,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"awmouse/host/internal/app"
@@ -26,15 +25,16 @@ type view struct {
 	root fyne.CanvasObject
 	core *app.App
 
-	dot     *canvas.Circle
-	status  *widget.Label
-	code    *canvas.Image
-	address *widget.Label
-	copy    *widget.Button
-	hint    *widget.Label
+	dot    *canvas.Circle
+	status *widget.Label
+	code   *canvas.Image
+	hint   *widget.Label
 
-	pin     *widget.Label
-	pinNote *widget.Label
+	// The QR is the only way in, and it changes every minute; the countdown
+	// is what stops that looking like a glitch.
+	countdown   *widget.Label
+	codeExpires time.Time
+
 	devices *fyne.Container
 	devNote *widget.Label
 
@@ -72,26 +72,14 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 	v.code.FillMode = canvas.ImageFillContain
 	v.code.SetMinSize(fyne.NewSize(240, 240))
 
-	v.address = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	v.address.Wrapping = fyne.TextWrapBreak
-
-	v.copy = widget.NewButton("Copy address", func() {
-		fa.Clipboard().SetContent(v.address.Text)
-	})
-	v.copy.Importance = widget.LowImportance
-
-	v.hint = widget.NewLabel("Scan with the phone's camera, or paste the address into the app and type the code.")
+	v.hint = widget.NewLabel("Scan with awmouse on your phone. The code is good for a minute, then a new one appears.")
 	v.hint.Wrapping = fyne.TextWrapWord
 	v.hint.Alignment = fyne.TextAlignCenter
 	v.hint.TextStyle = fyne.TextStyle{Italic: true}
 
-	// MARK: pairing code
-
-	v.pin = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true, Bold: true})
-	v.pin.SizeName = theme.SizeNameHeadingText
-	v.pinNote = widget.NewLabel("")
-	v.pinNote.Alignment = fyne.TextAlignCenter
-	v.pinNote.TextStyle = fyne.TextStyle{Italic: true}
+	v.countdown = widget.NewLabel("")
+	v.countdown.Alignment = fyne.TextAlignCenter
+	v.countdown.TextStyle = fyne.TextStyle{Monospace: true}
 
 	// MARK: paired devices
 
@@ -146,13 +134,8 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 		v.failure,
 		container.NewCenter(v.retry),
 		container.NewCenter(v.code),
-		v.address,
-		container.NewCenter(v.copy),
+		v.countdown,
 		v.hint,
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Pairing code", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		v.pin,
-		v.pinNote,
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Paired phones", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		v.devices,
@@ -180,6 +163,33 @@ func (v *view) follow(core *app.App) {
 	for st := range ch {
 		fyne.Do(func() { v.render(st) })
 	}
+}
+
+// tick drives the countdown under the QR once a second, from the expiry the
+// last status carried. Purely cosmetic; the app rotates the code on its own.
+func (v *view) tick(ctx context.Context) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			fyne.Do(v.renderCountdown)
+		}
+	}
+}
+
+func (v *view) renderCountdown() {
+	if v.codeExpires.IsZero() || !v.code.Visible() {
+		v.countdown.SetText("")
+		return
+	}
+	left := int(time.Until(v.codeExpires).Seconds())
+	if left < 0 {
+		left = 0
+	}
+	v.countdown.SetText(fmt.Sprintf("new code in %2ds", left))
 }
 
 func (v *view) render(st app.Status) {
@@ -235,33 +245,18 @@ func (v *view) render(st app.Status) {
 		}
 		v.code.Show()
 		v.hint.Show()
-		v.address.SetText(st.Address)
-		v.copy.Enable()
 	} else {
 		v.code.Hide()
 		v.hint.Hide()
 		v.codeFor = ""
-		v.address.SetText("")
-		v.copy.Disable()
 	}
 
-	v.renderPairing(st)
+	v.codeExpires = st.CodeExpires
+	v.renderCountdown()
+	v.renderDevices(st)
 }
 
-func (v *view) renderPairing(st app.Status) {
-	if st.Code == "" {
-		v.pin.SetText("—")
-		v.pinNote.SetText("")
-	} else {
-		// Spaced in threes: six digits read as a code, not a number.
-		v.pin.SetText(st.Code[:3] + "  " + st.Code[3:])
-		left := time.Until(st.CodeExpires).Round(time.Minute)
-		if left < time.Minute {
-			left = time.Minute
-		}
-		v.pinNote.SetText(fmt.Sprintf("New phones only. Changes after each pairing, or in %d min.", int(left.Minutes())))
-	}
-
+func (v *view) renderDevices(st app.Status) {
 	rows := make([]fyne.CanvasObject, 0, len(st.Devices))
 	for _, d := range st.Devices {
 		id := d.ID

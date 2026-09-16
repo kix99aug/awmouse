@@ -41,7 +41,7 @@ func main() {
 	w := fa.NewWindow("awmouse")
 	v := newView(ctx, fa, core)
 	w.SetContent(v.root)
-	w.Resize(fyne.NewSize(380, 620))
+	w.Resize(fyne.NewSize(380, 640))
 	w.SetFixedSize(true)
 
 	// Closing the window hides it; the app keeps running in the tray, which is
@@ -62,6 +62,7 @@ func main() {
 	}
 
 	go v.follow(core)
+	go v.tick(ctx)
 
 	w.ShowAndRun()
 }

@@ -106,11 +106,11 @@ second or two while the nearest relay is measured. Nothing needs opening in
 a firewall: the relay is only used to find each other, and the traffic moves
 to a direct path once one exists.
 
-A phone the host has not seen must present the six-digit **pairing code**
-under the QR. Scanning the QR supplies it automatically; pasting the address
-means typing it. The code changes after every pairing and every ten minutes,
-so the address alone — even from an old screenshot of the QR — gets nothing.
-Paired phones are listed in the window; Remove revokes one on the spot.
+The QR carries a six-digit pairing code alongside the address. A phone the
+host has not seen must present it; scanning supplies it, and there is no
+other way in. The code changes after every pairing and every minute — the
+window counts down — so an old screenshot of the QR gets nothing. Paired
+phones are listed in the window; Remove revokes one on the spot.
 
 The phone app reaches the tunnel through a Go framework that must be built
 once on the Mac, before the Xcode project will resolve — gomobile is a module
@@ -159,10 +159,9 @@ Run on a real device. The simulator's drag events come from a mouse, which
 tells you nothing about how the trackpad actually feels — which is the only
 question the POC exists to answer.
 
-Paste the address, or scan the QR — it deep-links via
-`awmouse://pair?tc=…&code=…`, so the stock Camera app opens the app directly
-and the phone is admitted without typing. A pasted address is asked for the
-code.
+Tap **Scan QR code** and point it at the computer. The stock Camera app
+works too — the QR deep-links via `awmouse://pair?tc=…&code=…`. Once
+paired, the app reconnects to the last computer on launch without a scan.
 
 ## CI
 

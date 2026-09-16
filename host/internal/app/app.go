@@ -169,15 +169,24 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
+// tickPairing checks once a second whether the code has rolled over, and
+// publishes only when it has. The window keeps its own countdown; the app
+// need not chatter every second to drive it.
 func (a *App) tickPairing(ctx context.Context) {
-	t := time.NewTicker(15 * time.Second)
+	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			a.refreshPairing()
+			code, _ := a.pair.Code() // rotates if expired
+			a.mu.Lock()
+			changed := code != a.status.Code
+			a.mu.Unlock()
+			if changed {
+				a.refreshPairing()
+			}
 		}
 	}
 }
@@ -188,9 +197,12 @@ func (a *App) tickPairing(ctx context.Context) {
 func (a *App) refreshPairing() {
 	code, expires := a.pair.Code()
 	devices := a.pair.Devices()
+	a.mu.Lock()
+	base := a.endpointBase
+	a.mu.Unlock()
 	a.update(func(s *Status) {
 		s.Code, s.CodeExpires, s.Devices = code, expires, devices
-		s.Endpoint = endpointWithCode(a.endpointBase, code)
+		s.Endpoint = endpointWithCode(base, code)
 	})
 }
 

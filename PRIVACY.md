@@ -44,6 +44,8 @@ own handling of relay traffic is described in
 
 ## Permissions the app asks for
 
+- **Camera** — to scan the QR code on your computer's screen. The camera is
+  used only while the scanner is open, and no image is stored or sent.
 - **Local Network** — to reach your computer directly when it is on the same
   Wi-Fi, instead of through the relay.
 - **Motion** — to aim the cursor by tilting the phone. Used only in Air Mouse
