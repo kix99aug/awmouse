@@ -79,6 +79,8 @@ notarize: zip
 windows:
 	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
 		go build -ldflags "$(LDFLAGS) -H=windowsgui" -o $(DIST)/awmouse.exe ./cmd/awmouse
+	rm -f $(DIST)/awmouse-win.zip
+	cd $(DIST) && zip -q awmouse-win.zip awmouse.exe
 
 test:
 	go vet ./...

@@ -92,7 +92,7 @@ ios/
 ```sh
 cd host
 make app        # macOS: dist/awmouse.app
-make windows    # Windows: dist/awmouse.exe (needs `brew install mingw-w64` on a Mac)
+make windows    # Windows: dist/awmouse-win.zip (needs `brew install mingw-w64` on a Mac)
 make run        # just run it, unpackaged
 ```
 
@@ -201,7 +201,7 @@ phone's tunnel is a gomobile framework.
 
 | Workflow | What it proves | Output |
 |---|---|---|
-| `host` | `go vet`, `go test`, the phone package cross-compiles for iOS and Android | `awmouse.app` for macOS (zipped) and `awmouse.exe` for Windows |
+| `host` | `go vet`, `go test`, the phone package cross-compiles for iOS and Android | `awmouse-macos.zip` and `awmouse-win.zip` |
 | `ios` | the app compiles against the bound framework, unsigned; `MotionInput` tests | `.app` (not installable) |
 | `ios-signed` | on a `v*` tag, or by hand — signs for App Store distribution and uploads to TestFlight | `.ipa`, and a TestFlight build |
 

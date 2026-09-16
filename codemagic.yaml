@@ -125,7 +125,7 @@ workflows:
           CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./mobile/...
     artifacts:
       - host/dist/awmouse-macos.zip
-      - host/dist/awmouse.exe
+      - host/dist/awmouse-win.zip
 
   ios:
     name: iOS app (unsigned)
