@@ -90,6 +90,21 @@ static void cursorPos(double *x, double *y) {
 }
 
 static int trusted(void) { return AXIsProcessTrusted() ? 1 : 0; }
+
+// Asks macOS to list this process under Accessibility and show its standard
+// prompt. The entry it creates is for the running binary, so the user cannot
+// grant the wrong copy — which is easy to do by hand: the grant is keyed on
+// the app's signing identity, and an ad-hoc build's identity changes on
+// every rebuild.
+static int promptForTrust(void) {
+	CFStringRef keys[] = { kAXTrustedCheckOptionPrompt };
+	CFTypeRef values[] = { kCFBooleanTrue };
+	CFDictionaryRef opts = CFDictionaryCreate(NULL, (const void **)keys, (const void **)values, 1,
+		&kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	int ok = AXIsProcessTrustedWithOptions(opts) ? 1 : 0;
+	CFRelease(opts);
+	return ok;
+}
 */
 import "C"
 
@@ -110,6 +125,12 @@ func New() (Injector, error) {
 		return nil, ErrNotTrusted
 	}
 	return &darwinInjector{held: map[Button]bool{}}, nil
+}
+
+// PromptForPermission asks the OS to register this process for input
+// permission and show its own prompt. Call it once; every call re-prompts.
+func PromptForPermission() {
+	C.promptForTrust()
 }
 
 func (d *darwinInjector) MoveTo(x, y, dx, dy float64) error {

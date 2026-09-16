@@ -223,6 +223,7 @@ func endpointWithCode(base, code string) string {
 // the Accessibility grant, which the user makes in System Settings while we
 // wait; there is nothing to do but check again.
 func (a *App) acquireInjector(ctx context.Context) (inject.Injector, error) {
+	prompted := false
 	for {
 		inj, err := inject.New()
 		if err == nil {
@@ -240,6 +241,13 @@ func (a *App) acquireInjector(ctx context.Context) (inject.Injector, error) {
 			s.Phase = PhaseNeedsPermission
 			s.Error = ""
 		})
+
+		// Once: have the OS list this exact process and put up its own
+		// prompt. Doing it on every poll would re-prompt every 1.5 s.
+		if !prompted {
+			prompted = true
+			inject.PromptForPermission()
+		}
 
 		select {
 		case <-ctx.Done():

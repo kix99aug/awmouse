@@ -9,3 +9,6 @@ import "errors"
 func New() (Injector, error) {
 	return nil, errors.New("no injector for this platform yet")
 }
+
+// PromptForPermission is a no-op: no permission is needed here.
+func PromptForPermission() {}

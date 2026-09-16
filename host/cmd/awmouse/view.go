@@ -289,7 +289,8 @@ func permissionCard(fa fyne.App) fyne.CanvasObject {
 	}
 
 	body := widget.NewLabel("macOS needs to allow awmouse to control the cursor. " +
-		"Turn it on under Privacy & Security › Accessibility — this window will notice on its own.")
+		"Turn on awmouse under Privacy & Security › Accessibility — this window will notice on its own. " +
+		"If awmouse is already on there, that entry is an older copy: remove it and turn on this one.")
 	body.Wrapping = fyne.TextWrapWord
 
 	open := widget.NewButton("Open System Settings", func() {

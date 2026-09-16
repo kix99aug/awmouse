@@ -121,11 +121,19 @@ cd ios && make tunnel
 ```
 
 **macOS** needs Accessibility permission, or `CGEventPost` silently does
-nothing. The app waits for it and says so; the button in the window opens
-the right pane. This is why the host must be a `.app` bundle: the grant
-attaches to the application that owns the process, and a bare binary
-launched from Finder runs inside Finder's launcher, so it would be that
-which ends up in the list.
+nothing. On first launch the app asks macOS to list it and put up the
+system prompt, so the entry that appears under Privacy & Security ›
+Accessibility is the copy that is actually running; turn it on and the
+window notices by itself.
+
+The grant is keyed on the app's signing identity. For a Developer ID
+build that is the team and bundle ID, so it survives updates. For an
+ad-hoc build it is the code hash, which changes on every rebuild — each
+new build needs granting again, and a grant made to one copy does nothing
+for another. If awmouse already shows as *on* in the list but the window
+still asks, that entry belongs to a different copy: remove it and grant
+the running one, or `tccutil reset Accessibility space.keybo.awmouse.host`.
+Keep one installed copy, in /Applications, and run that.
 
 The bundle is ad-hoc signed, not Developer ID signed, so a **downloaded**
 copy is refused by Gatekeeper the first time. Open it once anyway, then go

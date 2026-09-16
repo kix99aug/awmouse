@@ -227,3 +227,6 @@ func pick(cond bool, yes, no uint32) uint32 {
 	}
 	return no
 }
+
+// PromptForPermission is a no-op: Windows needs no permission to inject.
+func PromptForPermission() {}
