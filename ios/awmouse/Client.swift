@@ -14,10 +14,17 @@ final class Client: ObservableObject {
     }
 
     @Published private(set) var state: State = .disconnected
-    /// The computer this phone last connected to. Once paired, reconnecting
-    /// needs no code, so the app can do it on launch without asking.
-    @Published private(set) var lastTarget: Target? = UserDefaults.standard.string(forKey: "lastURL")
-        .flatMap { Target(address: $0) }
+
+    /// The computers this phone has paired with, most recent first. Once
+    /// paired, reconnecting needs no code, so any of them can be reached
+    /// without the QR — and the most recent is reached without being asked.
+    @Published private(set) var hosts: [KnownHost] = []
+
+    /// Which computer the current or last attempt was for, so a failure can
+    /// offer to try it again and a success knows what to record.
+    @Published private(set) var attempting: KnownHost?
+
+    private var store = KnownHosts()
 
     private var link: Link?
     private var pinger: Task<Void, Never>?
@@ -37,7 +44,23 @@ final class Client: ObservableObject {
     private var moveDX = 0.0, moveDY = 0.0, moveDT = 0.0
     private var scrollDX = 0.0, scrollDY = 0.0
 
+    init() {
+        hosts = store.all
+    }
+
     // MARK: - Connection
+
+    /// Connects to a computer already known, which needs no pairing code.
+    func connect(to host: KnownHost) {
+        attempting = host
+        connect(to: Target(address: host.address))
+    }
+
+    func forget(_ host: KnownHost) {
+        store.forget(host)
+        hosts = store.all
+        if attempting?.address == host.address { attempting = nil }
+    }
 
     func connect(to target: Target) {
         teardown()
@@ -62,10 +85,10 @@ final class Client: ObservableObject {
                 // dialing.
                 guard let self, self.dialGeneration == generation,
                       case .connecting = self.state
-                else { l.close(); return }
-                self.link = l
-                self.opened(target)
-                self.startPinging(l)
+                else { l.0.close(); return }
+                self.link = l.0
+                self.opened(target, name: l.1)
+                self.startPinging(l.0)
             } catch PairingError.codeRequired {
                 guard let self, self.dialGeneration == generation else { return }
                 self.state = .needsRescan
@@ -94,11 +117,13 @@ final class Client: ObservableObject {
         state = .disconnected
     }
 
-    private func opened(_ target: Target) {
+    private func opened(_ target: Target, name: String) {
         state = .connected
-        // Remember the address only: the code was single-use.
-        lastTarget = Target(address: target.address)
-        UserDefaults.standard.set(target.address, forKey: "lastURL")
+        // Remember the address and the name; never the code, which was
+        // single-use and is spent.
+        store.record(address: target.address, name: name)
+        hosts = store.all
+        attempting = hosts.first { $0.address == target.address }
     }
 
     private func failed(_ message: String) {
@@ -156,8 +181,8 @@ final class Client: ObservableObject {
         default:
             break
         }
-        guard let last = lastTarget else { return }
-        connect(to: last)
+        guard let recent = store.mostRecent else { return }
+        connect(to: recent)
     }
 
     // MARK: - Input

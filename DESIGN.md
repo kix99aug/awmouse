@@ -418,6 +418,14 @@ attacker a WireGuard session and a refusal.
   pipeline was first built over was retired once the tunnel worked: keeping it
   would have meant a choice in the window that changed nothing the user could
   feel.
+- **The phone keeps a list of computers, not just the last one.** A person
+  with a laptop and a desktop pairs with both and picks; the most recent is
+  reconnected to without being asked, and the rest are one tap away when that
+  one is off or out of reach. Each is stored as its address and the name the
+  host gave — a list of base64 addresses would be unusable, so the host sends
+  its name in the `ok` that answers a hello. Forgetting a computer on the
+  phone only forgets the address; revoking the phone's access is the host's
+  device list, and the two are independent on purpose.
 - The watch has no camera and never pairs independently — it always inherits
   the phone's connection.
 

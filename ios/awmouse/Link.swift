@@ -93,8 +93,10 @@ final class TunnelLink: NSObject, Link, @unchecked Sendable {
     /// Throws `PairingError` when the host answers but declines — a phone it
     /// has not seen must present the code from its window — and other errors
     /// when there was no answer at all.
+    /// Returns the link and the name the computer calls itself, which the
+    /// phone shows in place of the address once it knows more than one.
     static func dial(address: String, code: String?, deviceName: String,
-                     onClosed: @escaping @MainActor (String) -> Void) async throws -> TunnelLink {
+                     onClosed: @escaping @MainActor (String) -> Void) async throws -> (TunnelLink, String) {
         let listener = ClosedListener(onClosed)
         let key = ClientIdentity.key
         let session: AwmtunnelSession? = try await Task.detached {
@@ -114,10 +116,10 @@ final class TunnelLink: NSObject, Link, @unchecked Sendable {
         // the right thing to send when there is none: it costs nothing when
         // paired, and elicits the "code required" answer when not.
         // Read the verdict out inside the task: the result object is a Go
-        // handle Swift cannot see is Sendable, and two plain values are.
-        let (admitted, reason): (Bool, String) = try await Task.detached {
+        // handle Swift cannot see is Sendable, and plain values are.
+        let (admitted, reason, hostName): (Bool, String, String) = try await Task.detached {
             let r = try session.hello(code ?? "", name: deviceName, timeoutMillis: 5_000)
-            return (r.admitted, r.reason)
+            return (r.admitted, r.reason, r.name)
         }.value
         if !admitted {
             _ = try? session.close()
@@ -127,7 +129,7 @@ final class TunnelLink: NSObject, Link, @unchecked Sendable {
             default: throw PairingError.refused(reason)
             }
         }
-        return TunnelLink(session: session)
+        return (TunnelLink(session: session), hostName)
     }
 
     func send(_ json: String, done: @escaping @MainActor (Error?) -> Void) {

@@ -206,8 +206,12 @@ tells you nothing about how the trackpad actually feels — which is the only
 question the POC exists to answer.
 
 Tap **Scan QR code** and point it at the computer. The stock Camera app
-works too — the QR deep-links via `awmouse://pair?tc=…&code=…`. Once
-paired, the app reconnects to the last computer on launch without a scan.
+works too — the QR deep-links via `awmouse://pair?tc=…&code=…`.
+
+The phone remembers every computer it has paired with, listed by name.
+Opening the app reconnects to the most recent without asking; the others
+are one tap away when that one is off, and swiping a row forgets it. Add
+a computer by scanning its code.
 
 ## Logs
 

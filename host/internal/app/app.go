@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -507,7 +509,7 @@ func (s *session) OnMessage(m proto.Msg) error {
 	case proto.KindHello:
 		// Harmless repeat; answer it so a client that retries is not left
 		// waiting.
-		return s.conn.Reply(proto.Msg{T: proto.KindOK})
+		return s.conn.Reply(proto.Msg{T: proto.KindOK, Name: hostName()})
 	default:
 		err = fmt.Errorf("unknown kind %q", m.T)
 	}
@@ -543,7 +545,7 @@ func (s *session) hello(m proto.Msg) error {
 		}
 	}
 
-	if err := s.conn.Reply(proto.Msg{T: proto.KindOK}); err != nil {
+	if err := s.conn.Reply(proto.Msg{T: proto.KindOK, Name: hostName()}); err != nil {
 		return err
 	}
 	s.app.update(func(st *Status) {
@@ -585,4 +587,18 @@ func button(b string) inject.Button {
 	default:
 		return inject.ButtonLeft
 	}
+}
+
+// hostName is what the phone shows in its list of computers. The first label
+// of the hostname rather than the whole thing: "laptop0" reads as a computer,
+// "laptop0.example.com" reads as a server.
+func hostName() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "Computer"
+	}
+	if i := strings.IndexByte(h, '.'); i > 0 {
+		h = h[:i]
+	}
+	return h
 }

@@ -53,7 +53,10 @@ type Msg struct {
 	B string `json:"b,omitempty"`
 	D bool   `json:"d,omitempty"`
 
-	// Hello: the pairing code and a display name for the host's device list.
+	// Hello: the pairing code and a display name. Name travels both ways —
+	// on a hello it is the phone's, for the host's device list; on the ok
+	// that answers it, the host's, so the phone can show a name rather than
+	// an address when it has more than one computer to choose from.
 	Code string `json:"code,omitempty"`
 	Name string `json:"name,omitempty"`
 

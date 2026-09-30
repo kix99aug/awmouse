@@ -108,13 +108,14 @@ func (s *Session) Hello(code, name string, timeoutMillis int64) (*HelloResult, e
 		var reply struct {
 			T      string `json:"t"`
 			Reason string `json:"reason"`
+			Name   string `json:"name"`
 		}
 		if err := json.Unmarshal([]byte(line), &reply); err != nil {
 			return nil, fmt.Errorf("host answered with something unreadable: %w", err)
 		}
 		switch reply.T {
 		case "ok":
-			return &HelloResult{Admitted: true}, nil
+			return &HelloResult{Admitted: true, Name: reply.Name}, nil
 		case "no":
 			return &HelloResult{Reason: reply.Reason}, nil
 		default:
@@ -126,10 +127,12 @@ func (s *Session) Hello(code, name string, timeoutMillis int64) (*HelloResult, e
 }
 
 // HelloResult is the host's answer. When Admitted is false, Reason says why —
-// one of the Reason* constants, or empty if the host gave none.
+// one of the Reason* constants, or empty if the host gave none. Name is what
+// the computer calls itself, for a phone that knows several.
 type HelloResult struct {
 	Admitted bool
 	Reason   string
+	Name     string
 }
 
 // Reasons the host may give. Duplicated from the host's proto package for
