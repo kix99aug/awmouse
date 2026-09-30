@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -186,8 +187,20 @@ func (p *pairing) load() error {
 	if err := json.Unmarshal(b, &list); err != nil {
 		return fmt.Errorf("paired devices file: %w", err)
 	}
+	dirty := false
 	for _, d := range list {
+		// Earlier versions keyed a device on address *and* ephemeral port, so
+		// a returning phone never matched and was asked to pair again. Drop
+		// the port from anything stored that way rather than making everyone
+		// re-pair once.
+		if host, _, err := net.SplitHostPort(d.ID); err == nil {
+			d.ID = host
+			dirty = true
+		}
 		p.devices[d.ID] = d
+	}
+	if dirty {
+		return p.saveLocked()
 	}
 	return nil
 }

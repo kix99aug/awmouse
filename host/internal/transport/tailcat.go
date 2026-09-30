@@ -126,7 +126,7 @@ func (t *Tailcat) serve(ctx context.Context, c net.Conn, h Handler) {
 	stop := context.AfterFunc(ctx, func() { c.Close() })
 	defer stop()
 
-	peer := c.RemoteAddr().String()
+	peer := peerID(c.RemoteAddr())
 	opened := time.Now()
 	log.Printf("client connected: %s", peer)
 
@@ -189,4 +189,16 @@ func tailcatLogf() func(string, ...any) {
 	return func(format string, args ...any) {
 		log.Printf("tailcat: "+format, args...)
 	}
+}
+
+// peerID is the phone's address without the port. The address is derived from
+// the phone's node key and is the same on every connection; the port is
+// ephemeral and different each time, so including it would make a returning
+// phone look like one that had never been seen.
+func peerID(a net.Addr) string {
+	s := a.String()
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		return host
+	}
+	return s
 }

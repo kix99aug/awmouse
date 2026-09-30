@@ -22,6 +22,11 @@ final class Client: ObservableObject {
     private var link: Link?
     private var pinger: Task<Void, Never>?
     private var dialGeneration = 0 // a dial that finishes after a newer connect() is discarded
+
+    /// Set when the user pressed Disconnect. Being disconnected on purpose
+    /// and being disconnected by circumstance look the same from the state
+    /// alone, and only one of them should be undone automatically.
+    private var stayDisconnected = false
     private let encoder = JSONEncoder()
 
     // Motion coalescing. While a send is in flight, further deltas accumulate
@@ -35,7 +40,8 @@ final class Client: ObservableObject {
     // MARK: - Connection
 
     func connect(to target: Target) {
-        disconnect()
+        teardown()
+        stayDisconnected = false
         state = .connecting
 
         dialGeneration += 1
@@ -69,7 +75,15 @@ final class Client: ObservableObject {
         }
     }
 
+    /// The user pressing Disconnect. Stays disconnected until they ask to
+    /// connect again.
     func disconnect() {
+        stayDisconnected = true
+        teardown()
+        state = .disconnected
+    }
+
+    private func teardown() {
         pinger?.cancel()
         pinger = nil
         link?.close()
@@ -135,6 +149,7 @@ final class Client: ObservableObject {
     /// Not from `needsRescan`: that needs a fresh code, and retrying without
     /// one would only be refused again.
     func reconnectIfNeeded() {
+        guard !stayDisconnected else { return }
         switch state {
         case .connected, .connecting, .needsRescan:
             return

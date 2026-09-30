@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -176,5 +177,37 @@ func TestSpentCodeGetsNoGrace(t *testing.T) {
 	}
 	if err := p.Try("phone-b", "", code); err == nil {
 		t.Fatal("spent code admitted a second phone within what would be the grace window")
+	}
+}
+
+// A device stored by an earlier version carried the connection's ephemeral
+// port, which differs every time, so the phone was asked to pair on every
+// reconnect. Those entries are rewritten on load rather than being left to
+// expire on their own.
+func TestStoredDeviceIDsLoseTheirPort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "paired.json")
+	old := `[{"id":"[fd7a:115c:a1e0::1]:21899","name":"iPhone","since":"2026-09-30T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := newPairing(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bare, without brackets: net.SplitHostPort strips them, and the
+	// transport derives the live peer's id with the same call, so the two
+	// forms agree by construction.
+	if !p.IsPaired("fd7a:115c:a1e0::1") {
+		t.Fatalf("device not recognised after migration; have %+v", p.Devices())
+	}
+
+	// And the rewrite is persisted, not redone on every start.
+	again, err := newPairing(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.IsPaired("fd7a:115c:a1e0::1") {
+		t.Fatal("migration was not saved")
 	}
 }

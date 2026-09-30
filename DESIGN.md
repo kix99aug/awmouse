@@ -383,7 +383,9 @@ attacker a WireGuard session and a refusal.
 - **A phone that has been admitted once is admitted thereafter.** Its identity
   is its tailcat address, which is derived from its node key and bound to that
   key by WireGuard's cryptokey routing — a packet from that address came from
-  the holder of that key, or it did not arrive. The host keeps the list beside
+  the holder of that key, or it did not arrive. The **address**, with no port:
+  the port is the connection's, freshly chosen each time, and keying a device
+  on it means no phone is ever recognised twice. The host keeps the list beside
   its own identity, since the two mean nothing apart: rotating the host key
   changes the address every phone holds and un-pairs them all regardless.
 - **Revocation is per phone.** Removing one from the list drops it at once if

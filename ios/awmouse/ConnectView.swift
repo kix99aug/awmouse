@@ -38,6 +38,11 @@ struct ConnectView: View {
                 }
 
             default:
+                if let last = client.lastTarget {
+                    Button("Connect") { client.connect(to: last) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                }
                 scanButton
             }
 
@@ -54,10 +59,9 @@ struct ConnectView: View {
         .onAppear {
             // A paired phone needs no code, so reconnecting to the last
             // computer is silent — and it is what the user wants nine times in
-            // ten. The scan button is there for the tenth.
-            if case .disconnected = client.state, let last = client.lastTarget {
-                client.connect(to: last)
-            }
+            // ten. The scan button is there for the tenth, and Disconnect is
+            // honoured: reconnectIfNeeded declines after a deliberate one.
+            client.reconnectIfNeeded()
         }
         .sheet(isPresented: $scanning) {
             ScannerView { value in
