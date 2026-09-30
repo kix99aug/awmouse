@@ -18,3 +18,4 @@ ios/Config/Local.xcconfig
 # SwiftPM
 .build/
 .swiftpm/
+host/awmouse

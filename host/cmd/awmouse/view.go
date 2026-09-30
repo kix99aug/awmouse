@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"log"
 	"net/url"
+	"os/exec"
 	"runtime"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"awmouse/host/internal/app"
+	"awmouse/host/internal/logs"
 	"awmouse/host/internal/qr"
 )
 
@@ -144,6 +146,8 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 		widget.NewLabelWithStyle("Scrolling", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		v.invert,
 		gainRow,
+		widget.NewSeparator(),
+		container.NewCenter(showLogButton(fa)),
 	))
 
 	// Initial values, from the saved settings.
@@ -302,4 +306,25 @@ func permissionCard(fa fyne.App) fyne.CanvasObject {
 	open.Importance = widget.HighImportance
 
 	return widget.NewCard("Permission needed", "", container.NewVBox(body, open))
+}
+
+// showLogButton reveals the log in Finder. Without it the log may as well not
+// exist: its directory is one the user has no reason to know about, and the
+// whole point of writing it is that something went wrong after the window was
+// already open.
+func showLogButton(fa fyne.App) *widget.Button {
+	b := widget.NewButton("Show log", func() {
+		path := logs.Path()
+		if path == "" {
+			return
+		}
+		// Reveal rather than open: the folder holds the rotated copy and the
+		// identity too, and a log is usually wanted as a file to send on.
+		if err := exec.Command("open", "-R", path).Run(); err != nil {
+			// Not every platform has `open`; the path alone is still useful.
+			log.Printf("reveal log (%s): %v", path, err)
+		}
+	})
+	b.Importance = widget.LowImportance
+	return b
 }

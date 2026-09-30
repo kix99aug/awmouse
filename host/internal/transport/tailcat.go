@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -55,7 +56,7 @@ func NewTailcat(ctx context.Context, id Identity, port uint16, region *tailcfg.D
 			Key:          id.Key,
 			PresharedKey: id.PSK,
 			Region:       region,
-			Logf:         func(string, ...any) {}, // tailcat is chatty at the level of individual DERP frames
+			Logf:         tailcatLogf(),
 		},
 	}
 	t.srv.OnTCP = func(port uint16) func(net.Conn) {
@@ -126,6 +127,7 @@ func (t *Tailcat) serve(ctx context.Context, c net.Conn, h Handler) {
 	defer stop()
 
 	peer := c.RemoteAddr().String()
+	opened := time.Now()
 	log.Printf("client connected: %s", peer)
 
 	sess := h.Accept(peer, lineConn{c})
@@ -133,9 +135,16 @@ func (t *Tailcat) serve(ctx context.Context, c net.Conn, h Handler) {
 		log.Printf("client refused: %s", peer)
 		return
 	}
+
+	// Why the connection ended, in the disconnect line. A silent
+	// disappearance and a clean close look identical from the cursor's point
+	// of view and are entirely different problems.
+	why := "closed by peer"
+	msgs := 0
 	defer func() {
 		sess.OnDisconnect()
-		log.Printf("client disconnected: %s", peer)
+		log.Printf("client disconnected: %s after %s, %d messages (%s)",
+			peer, time.Since(opened).Round(time.Second), msgs, why)
 	}()
 
 	sc := bufio.NewScanner(c)
@@ -144,10 +153,16 @@ func (t *Tailcat) serve(ctx context.Context, c net.Conn, h Handler) {
 		if len(line) == 0 {
 			continue
 		}
+		msgs++
 		if err := dispatch(sess, line); err != nil {
-			log.Printf("client %s: %v", peer, err)
+			why = "rejected: " + err.Error()
 			return
 		}
+	}
+	if err := sc.Err(); err != nil {
+		why = "read error: " + err.Error()
+	} else if ctx.Err() != nil {
+		why = "host shutting down"
 	}
 }
 
@@ -161,4 +176,17 @@ func (l lineConn) Reply(m proto.Msg) error {
 	}
 	_, err = l.Write(append(b, '\n'))
 	return err
+}
+
+// tailcatLogf routes tailcat's own diagnostics into the log, or discards
+// them. They are chatty — individual DERP frames — so they are off unless
+// AWMOUSE_VERBOSE is set, which is what to turn on when a tunnel is dropping
+// and the reason is not in the ordinary lines.
+func tailcatLogf() func(string, ...any) {
+	if os.Getenv("AWMOUSE_VERBOSE") == "" {
+		return func(string, ...any) {}
+	}
+	return func(format string, args ...any) {
+		log.Printf("tailcat: "+format, args...)
+	}
 }

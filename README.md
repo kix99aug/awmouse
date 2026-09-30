@@ -209,6 +209,19 @@ Tap **Scan QR code** and point it at the computer. The stock Camera app
 works too — the QR deep-links via `awmouse://pair?tc=…&code=…`. Once
 paired, the app reconnects to the last computer on launch without a scan.
 
+## Logs
+
+The host writes to `~/Library/Application Support/awmouse/awmouse.log` on
+macOS, and the matching config directory elsewhere; **Show log** at the
+bottom of the window reveals it. A GUI app's stderr goes nowhere, so
+without this anything that happens after the window opens — a tunnel that
+drops, a phone that stops answering — leaves no trace.
+
+Each connection logs how long it lasted, how many messages it carried, and
+what ended it. For trouble inside the tunnel itself, run with
+`AWMOUSE_VERBOSE=1` to include tailcat's own diagnostics, which are far too
+chatty to keep on by default.
+
 ## CI
 
 `codemagic.yaml` runs on every push to `main` and every PR, on macOS

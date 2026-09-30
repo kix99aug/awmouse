@@ -4,6 +4,7 @@ import SwiftUI
 struct AWMouseApp: App {
     @StateObject private var client: Client
     @StateObject private var air: AirMouse
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let client = Client()
@@ -17,6 +18,11 @@ struct AWMouseApp: App {
                 .environmentObject(client)
                 .environmentObject(air)
                 .onOpenURL(perform: handlePairingLink)
+                .onChange(of: scenePhase) { _, phase in
+                    // Coming back to the app is when to notice the tunnel died
+                    // while it was suspended.
+                    if phase == .active { client.reconnectIfNeeded() }
+                }
         }
     }
 

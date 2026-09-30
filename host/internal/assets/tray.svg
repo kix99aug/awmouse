@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22">
+  <!--
+    Menu-bar glyph: the pointer alone, as a single filled path in currentColor.
+
+    SVG, not PNG: Fyne's ThemedResource recolours an icon by rewriting its
+    XML, and hands a PNG straight back with an error. That error also fired on
+    every redraw, which is worse than it sounds now that the log is a file
+    someone reads to diagnose something else.
+  -->
+  <path fill="currentColor"
+        d="M6.6 3.1 L6.6 17.4 L10.4 14.0 L12.9 18.9 L15.0 17.9 L12.5 13.1 L17.4 13.1 Z"/>
+</svg>

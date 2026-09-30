@@ -45,7 +45,12 @@ final class Client: ObservableObject {
                 let l = try await TunnelLink.dial(
                     address: target.address, code: target.code, deviceName: UIDevice.current.name
                 ) { [weak self] reason in
-                    self?.failed("connection closed: " + reason)
+                    // Tagged with the generation that opened it. Closing a
+                    // link is asynchronous, so the previous one's callback can
+                    // land after a reconnect has already started — and without
+                    // this check it would report the new attempt as failed.
+                    guard let self, self.dialGeneration == generation else { return }
+                    self.failed("connection closed: " + reason)
                 }
                 // The user may have cancelled or retargeted while we were
                 // dialing.
@@ -99,19 +104,45 @@ final class Client: ObservableObject {
 
     /// The tunnel cannot tell a dead host from a quiet one on its own — see
     /// `TunnelLink.ping` — so ask it every few seconds.
+    ///
+    /// One unanswered ping is not a dead host: a Wi-Fi to cellular handover,
+    /// or a moment's trouble at the relay, loses a round trip on a link that
+    /// is about to be fine. Only a run of them means anything.
     private func startPinging(_ l: TunnelLink) {
+        let tolerated = 3
         pinger = Task { [weak self] in
+            var missed = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 if Task.isCancelled { return }
                 do {
                     _ = try await l.ping()
+                    missed = 0
                 } catch {
-                    self?.failed("host not responding")
-                    return
+                    missed += 1
+                    if missed >= tolerated {
+                        self?.failed("host stopped responding")
+                        return
+                    }
                 }
             }
         }
+    }
+
+    /// Reconnects to the last computer if the link is not up. iOS suspends a
+    /// backgrounded app and the tunnel dies with it, so returning to the app
+    /// routinely finds a connection that ended while nobody was looking.
+    /// Not from `needsRescan`: that needs a fresh code, and retrying without
+    /// one would only be refused again.
+    func reconnectIfNeeded() {
+        switch state {
+        case .connected, .connecting, .needsRescan:
+            return
+        default:
+            break
+        }
+        guard let last = lastTarget else { return }
+        connect(to: last)
     }
 
     // MARK: - Input

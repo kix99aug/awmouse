@@ -15,12 +15,18 @@ import (
 
 	"awmouse/host/internal/app"
 	"awmouse/host/internal/assets"
+	"awmouse/host/internal/logs"
 )
 
 const appID = "space.keybo.awmouse.host"
 
 func main() {
-	log.SetFlags(log.Ltime)
+	logPath, logErr := logs.Setup()
+	if logErr != nil {
+		log.SetFlags(log.Ltime)
+		log.Printf("logging to a file failed: %v", logErr)
+	}
+	log.Printf("awmouse starting (log: %s)", logPath)
 
 	fa := fyneapp.NewWithID(appID)
 	fa.SetIcon(assets.Icon)
