@@ -178,12 +178,25 @@ workflows:
       - *install_go
       - name: Install XcodeGen
         script: brew install xcodegen
-      - name: Test MotionInput
-        working_directory: shared/MotionInput
-        script: swift test
+      - name: Test the shared packages
+        script: |
+          (cd shared/MotionInput && swift test)
+          (cd shared/WatchBridge && swift test)
       - name: Bind the tunnel and generate the project
         working_directory: ios
         script: make project
+      - name: Install the watchOS platform if the runner lacks it
+        script: |
+          # The phone app embeds a watch app, so the build needs the watchOS
+          # platform — a separate download since Xcode 15, and not on every
+          # image. Conditional because it is several GB and most runs will
+          # already have it.
+          if xcodebuild -showdestinations -project ios/awmouse.xcodeproj \
+               -scheme awmouse-watch 2>&1 | grep -q "is not installed"; then
+            xcodebuild -downloadPlatform watchOS
+          else
+            echo "watchOS platform present"
+          fi
       - name: Build for device, unsigned
         working_directory: ios
         script: |
@@ -258,6 +271,9 @@ workflows:
           # else. Creating the distribution certificate needs the API key to
           # hold the Admin or App Manager role — Developer is not enough.
           app-store-connect fetch-signing-files "space.keybo.awmouse" --type IOS_APP_STORE --platform IOS --certificate-key=@env:CERTIFICATE_PRIVATE_KEY --create
+          # The embedded watch app is a second bundle id and needs its own
+          # profile; signing the phone app alone leaves the archive unsignable.
+          app-store-connect fetch-signing-files "space.keybo.awmouse.watchkitapp" --type IOS_APP_STORE --platform IOS --certificate-key=@env:CERTIFICATE_PRIVATE_KEY --create
           keychain initialize
           keychain add-certificates
       - *install_go
@@ -266,6 +282,18 @@ workflows:
       - name: Bind the tunnel and generate the project
         working_directory: ios
         script: make project
+      - name: Install the watchOS platform if the runner lacks it
+        script: |
+          # The phone app embeds a watch app, so the build needs the watchOS
+          # platform — a separate download since Xcode 15, and not on every
+          # image. Conditional because it is several GB and most runs will
+          # already have it.
+          if xcodebuild -showdestinations -project ios/awmouse.xcodeproj \
+               -scheme awmouse-watch 2>&1 | grep -q "is not installed"; then
+            xcodebuild -downloadPlatform watchOS
+          else
+            echo "watchOS platform present"
+          fi
       - name: Apply signing to the generated project
         working_directory: ios
         script: xcode-project use-profiles

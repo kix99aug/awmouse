@@ -1,16 +1,26 @@
 import SwiftUI
+import UIKit
+import WatchBridge
+
+/// Exists for one line: `didFinishLaunchingWithOptions` is the only hook that
+/// runs on a background launch, which is how the phone app starts when the
+/// watch sends it something. SwiftUI's scene has not appeared at that point
+/// and may never appear at all.
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        MainActor.assumeIsolated { AppCore.shared.start() }
+        return true
+    }
+}
 
 @main
 struct AWMouseApp: App {
-    @StateObject private var client: Client
-    @StateObject private var air: AirMouse
-    @Environment(\.scenePhase) private var scenePhase
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
-    init() {
-        let client = Client()
-        _client = StateObject(wrappedValue: client)
-        _air = StateObject(wrappedValue: AirMouse(client: client))
-    }
+    @StateObject private var client = AppCore.shared.client
+    @StateObject private var air = AppCore.shared.air
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -18,6 +28,12 @@ struct AWMouseApp: App {
                 .environmentObject(client)
                 .environmentObject(air)
                 .onOpenURL(perform: handlePairingLink)
+                // Opened from the watch's Handoff offer. Arriving here means
+                // somebody is holding a watch waiting to drive the cursor, so
+                // connect without making them ask twice.
+                .onContinueUserActivity(controlActivityType) { _ in
+                    client.connectForRemoteUse()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     // Coming back to the app is when to notice the tunnel died
                     // while it was suspended.

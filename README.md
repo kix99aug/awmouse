@@ -21,7 +21,7 @@ Confirmed working on device.
 | tailcat transport | host side working, tested over a loopback relay; phone framework written, not yet bound or run on a device |
 | Windows injection (`SendInput`, absolute) | working, driven from the phone; elevated windows need the host elevated too, which it offers at startup |
 | Linux injection (`uinput`) | not started |
-| watchOS app | not started |
+| watchOS app | builds and embeds; needs on-wrist testing |
 
 ## Gestures
 
@@ -29,6 +29,36 @@ Confirmed working on device.
 |---|---|
 Everything common is reachable with one finger; the multi-finger gestures are
 conveniences, since two fingers are awkward while one hand holds the phone.
+
+### On the watch
+
+The watch face is a trackpad.
+
+| Gesture | Action |
+|---|---|
+| drag on the screen | move the cursor |
+| tap | left click |
+| press and hold | right click |
+| turn the Digital Crown | scroll |
+
+Every click taps back, since the cursor is on a screen you are probably not
+looking at.
+
+A mode that aimed by moving your wrist was tried and removed: tapping the
+watch to click shook the wrist, and the gyro read that as aiming, so the
+cursor slid off whatever you were clicking. The phone keeps its gyro mode,
+where the hand that clicks is not the hand that aims.
+
+The phone app does not need to be open — the watch wakes it. It does need to
+not have been **swiped out of the app switcher**: iOS treats that as "stop
+running this" and will not relaunch it for anything until you open it
+yourself. While that is the case the watch says *open awmouse on iPhone*, and
+your phone offers awmouse on its lock screen so it is one tap away.
+
+The watch pairs with nothing — it reaches the computer through the phone, so
+the phone must be nearby and connected. The watch says so when it isn't.
+
+### On the phone
 
 | Gesture | Action |
 |---|---|
@@ -78,11 +108,13 @@ host/                       Go host app (Fyne)
   internal/cursor/          acceleration curve + position state
   internal/transport/       Transport interface; the tailcat impl
   mobile/awmtunnel/         the phone's end of the tailcat pipe, bound with gomobile
-shared/MotionInput/         Swift package — gyro filtering, shared with watchOS later
+shared/MotionInput/         Swift package — gyro filtering and tap detection, shared by phone and watch
+shared/WatchBridge/         Swift package — what the watch sends the phone, and the WCSession plumbing
 ios/
   project.yml               XcodeGen source of truth — edit this, not the .xcodeproj
   icon.svg                  app icon source — `make icon` rasterises it into the asset catalog
-  awmouse/                  SwiftUI client
+  awmouse/                  SwiftUI phone client
+  watch/                    SwiftUI watch client, embedded in the phone app
 ```
 
 ## Running

@@ -30,6 +30,16 @@ public final class MotionSource {
     private var filter: PointerFilter
     private var lastTimestamp: TimeInterval?
 
+    /// Serial, so samples arrive in order, and off the main thread so that
+    /// sensor delivery is not competing with drawing.
+    private let queue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "MotionInput.samples"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .userInteractive
+        return q
+    }()
+
     public init(config: PointerFilter.Config = .init()) {
         self.filter = PointerFilter(config: config)
     }
@@ -46,12 +56,32 @@ public final class MotionSource {
         filter.reset()
         isRunning = true
 
-        manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
-            guard let self, let motion else { return }
-            MainActor.assumeIsolated {
-                self.consume(motion)
+        // The handler must be explicitly @Sendable, and must not carry the
+        // CMDeviceMotion across.
+        //
+        // A closure formed inside a @MainActor type that captures self is
+        // inferred to be @MainActor too. CoreMotion's handler is neither
+        // Sendable nor isolated, so the runtime checks the isolation on entry
+        // and traps the moment CoreMotion calls it from its own queue — before
+        // a line of this code runs, which is why hopping to the main queue
+        // inside the body changed nothing. It passed on iOS only while the
+        // handler happened to be invoked on the main queue; watchOS used
+        // another, and so did this queue.
+        //
+        // Marked @Sendable, no isolation is inferred and no check is inserted.
+        // What then has to be true is that nothing unsendable crosses: the
+        // sample is reduced to plain numbers here, on the delivery queue, and
+        // only those go to the main actor. DispatchQueue.main rather than a
+        // Task because it is FIFO, and samples whose order is lost would
+        // corrupt every interval computed from them.
+        let handler: @Sendable (CMDeviceMotion?, Error?) -> Void = { [weak self] motion, _ in
+            guard let motion else { return }
+            let sample = Sample(motion)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.consume(sample) }
             }
         }
+        manager.startDeviceMotionUpdates(to: queue, withHandler: handler)
     }
 
     public func stop() {
@@ -69,13 +99,13 @@ public final class MotionSource {
         lastTimestamp = nil
     }
 
-    private func consume(_ motion: CMDeviceMotion) {
+    private func consume(_ sample: Sample) {
         // Elapsed time comes from the sample timestamps rather than from
         // deviceMotionUpdateInterval, which is a request rather than a promise.
-        defer { lastTimestamp = motion.timestamp }
+        defer { lastTimestamp = sample.timestamp }
         guard let previous = lastTimestamp else { return }
 
-        let dt = motion.timestamp - previous
+        let dt = sample.timestamp - previous
         guard dt > 0 else { return }
 
         // CMDeviceMotion.rotationRate is bias-corrected by CoreMotion's sensor
@@ -86,16 +116,8 @@ public final class MotionSource {
         // Which device axis means "aim sideways" depends on how the device is
         // held, so gravity resolves it rather than a fixed axis being assumed.
         let (yaw, pitch) = MotionGeometry.resolve(
-            rotationRate: .init(
-                x: motion.rotationRate.x,
-                y: motion.rotationRate.y,
-                z: motion.rotationRate.z
-            ),
-            gravity: .init(
-                x: motion.gravity.x,
-                y: motion.gravity.y,
-                z: motion.gravity.z
-            )
+            rotationRate: sample.rotation,
+            gravity: sample.gravity
         )
 
         // Both negated: a positive yaw turns the device left, and a positive
@@ -104,6 +126,23 @@ public final class MotionSource {
 
         guard dx != 0 || dy != 0 else { return }
         onDelta?(dx, dy, dt * 1000)
+    }
+}
+
+/// One motion sample as plain numbers.
+///
+/// CMDeviceMotion is a class and not Sendable, so it cannot be handed from
+/// CoreMotion's queue to the main actor. Everything wanted from it is a few
+/// doubles, which can.
+private struct Sample: Sendable {
+    let timestamp: TimeInterval
+    let rotation: MotionGeometry.Vector3
+    let gravity: MotionGeometry.Vector3
+
+    init(_ m: CMDeviceMotion) {
+        timestamp = m.timestamp
+        rotation = .init(x: m.rotationRate.x, y: m.rotationRate.y, z: m.rotationRate.z)
+        gravity = .init(x: m.gravity.x, y: m.gravity.y, z: m.gravity.z)
     }
 }
 

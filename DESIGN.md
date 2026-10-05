@@ -53,9 +53,20 @@ once and linked into both targets:
   import, so the part that decides how an air mouse *feels* can be unit tested
   rather than only evaluated by waving a phone around.
 - `MotionSource` — the CoreMotion wrapper that feeds both.
-- tap detection (watch only, not yet built): peak detection on
-  `CMDeviceMotion.userAcceleration` + ~300 ms debounce to disambiguate single
-  from double.
+
+Used by the phone alone now. The watch reads no sensor, so it does not link
+this at all.
+
+**CoreMotion's handler must be explicitly `@Sendable`.** A closure formed
+inside a `@MainActor` type and capturing `self` is inferred to be `@MainActor`
+too, and CoreMotion's handler is neither Sendable nor isolated — so the
+runtime checks isolation on entry and traps the moment it is called from
+CoreMotion's own queue, before a line of the body runs. It passed on iOS only
+while the handler happened to be invoked on the main queue; watchOS used
+another. Marked `@Sendable` no check is inserted, and what must then be true
+is that nothing unsendable crosses: `CMDeviceMotion` is a class, so each
+sample is reduced to plain numbers on the delivery queue and only those go to
+the main actor.
 
 Three decisions inside the filter, each of which is felt in the hand:
 
@@ -90,6 +101,40 @@ the JSON the host consumes, so sharing `Msg` would buy nothing.
 Deliberately *not* using the watchOS system Double Tap gesture
 (`.handGestureShortcut`): it requires Series 9 / Ultra 2 or newer, and it hands
 you one fixed action rather than single-vs-double discrimination.
+
+### Watch gesture set
+
+The watch face is a trackpad and the crown is a scroll wheel:
+
+| Gesture | Action |
+|---|---|
+| drag on the screen | move the cursor |
+| tap | left click |
+| press and hold | right click |
+| turn the Digital Crown | scroll |
+
+No clutch to toggle: the finger on the glass is the clutch, exactly as on the
+phone. The crown is free because the finger is busy, which is the whole reason
+it gets the scrolling.
+
+Right click is the hold, not a second tap. A double tap would put its wait on
+every left click — the trade the phone refused — and the phone's answer, a
+second target along one edge, does not fit on a screen this size. Holding
+costs nothing until somebody holds.
+
+**There was a second mode that aimed by moving the wrist, and it was
+removed.** Clicking meant knocking the watch; knocking the watch shook the arm
+it was strapped to; and the gyro could not tell that jolt from aiming, so the
+cursor slid away at the moment of every click. Freezing the cursor around each
+knock — below the threshold that counted as a click, so the freeze began on
+the leading edge — helped and did not fix it. The advantage it had, crossing a
+display in one sweep, did not pay for a click that moved the thing it was
+clicking on. The phone keeps its gyro mode, where the clicking hand is not the
+aiming hand.
+
+**Haptics stand in for the screen.** The cursor is on another display and the
+watch is usually out of the line of sight, so a click that fired and a click
+that was swallowed would be indistinguishable. Each one taps back.
 
 ### iPhone gesture set
 
@@ -202,8 +247,11 @@ now, so scrolling before the press has resolved would nudge the page on the way
 to a right click. An earlier version skipped the pause there, correctly, back
 when the strip did nothing but scroll.
 
-The watch has no touch surface to spare and will need its own answer — holding
-the Digital Crown is the obvious candidate.
+**On the watch the clutch is a toggle, not something held.** Holding the
+Digital Crown is not available to apps — rotation is, a press is the system's
+— and holding the screen means using the other hand, which gives up the one
+advantage the watch has over the phone. So: tap the button to start aiming,
+tap it again to stop. The wrist is then free, which is the whole point.
 
 ### Host app
 
@@ -439,6 +487,18 @@ attacker a WireGuard session and a refusal.
   pipeline was first built over was retired once the tunnel worked: keeping it
   would have meant a choice in the window that changed nothing the user could
   feel.
+- **The watch pairs with nothing.** It reaches the host only through the
+  phone, so it inherits whatever the phone is connected to, and the phone
+  tells it which computer that is. There is nothing to scan on a watch and no
+  second credential to keep.
+- **A phone app the user swiped away cannot be reached, and no code fixes
+  that.** iOS reads that gesture as "stop running this" and withholds every
+  background launch, WatchConnectivity included, until the app is opened by
+  hand. A watch that is merely talking to a backgrounded or suspended phone is
+  fine — a queued transfer launches it. Only a force quit is final. The watch
+  says which of the two it is, and advertises a Handoff activity while the
+  phone is absent, so the phone offers awmouse on its lock screen: one tap
+  instead of going to find it.
 - **The phone keeps a list of computers, not just the last one.** A person
   with a laptop and a desktop pairs with both and picks; the most recent is
   reconnected to without being asked, and the rest are one tap away when that
@@ -509,6 +569,19 @@ Each stage validates the next:
 ## Open questions / risks
 
 Roughly in order of how likely they are to hurt:
+
+0. **WatchConnectivity at pointer rates.** It is built for occasional small
+   messages, not a stream, and no amount of reasoning settles what it will
+   actually carry. Motion is therefore accumulated on the watch and flushed at
+   30 Hz, and the watch counts what the link refuses and measures a round trip
+   once a second — so the first wrist-test produces a number rather than an
+   impression. If the drops are high, the rate comes down.
+0. **watchOS suspends an app when the wrist drops.** Aiming would stop with
+   it. Keeping a watch app alive means an extended runtime session, and the
+   categories those come in — mindfulness, physical therapy — do not include
+   "mouse"; claiming one to dodge the rule is the sort of thing review exists
+   to catch. Whether this matters depends on how long the screen stays lit
+   while an arm is actually aiming, which is a measurement, not an argument.
 
 1. **Tap false positives.** Arm swing during normal movement resembles a tap
    spike. Needs tuning against recorded sensor traces; a fixed threshold picked

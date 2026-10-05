@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: space.keybo
   deploymentTarget:
     iOS: "17.0"
+    watchOS: "10.0"
   createIntermediateGroups: true
 
 # Signing identity lives here rather than in this file so that a personal team
@@ -16,6 +17,8 @@ configFiles:
 packages:
   MotionInput:
     path: ../shared/MotionInput
+  WatchBridge:
+    path: ../shared/WatchBridge
 
 targets:
   awmouse:
@@ -25,9 +28,18 @@ targets:
       - awmouse
     dependencies:
       - package: MotionInput
+      - package: WatchBridge
       # The Go tunnel, bound by `make tunnel`. Static, so not embedded.
       - framework: Frameworks/Awmtunnel.xcframework
         embed: false
+      # The watch app ships inside the phone app, in the folder the installer
+      # looks in. It is not independent: it reaches the host by talking to the
+      # phone, which is the only side that can run the Go tunnel.
+      - target: awmouse-watch
+        embed: true
+        copy:
+          destination: productsDirectory
+          subpath: $(CONTENTS_FOLDER_PATH)/Watch
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: space.keybo.awmouse
@@ -91,9 +103,51 @@ targets:
         # not a build one.
         ITSAppUsesNonExemptEncryption: false
 
+        # Handoff from the watch. iOS will not relaunch an app the user
+        # swiped away, so the watch advertises this instead and the phone
+        # offers it on the lock screen — one tap rather than a dead end.
+        NSUserActivityTypes:
+          - space.keybo.awmouse.control
+
         # Lets the QR code deep-link straight into the app from the stock
         # Camera app, instead of requiring the in-app scanner first.
         CFBundleURLTypes:
           - CFBundleURLName: space.keybo.awmouse.pair
             CFBundleURLSchemes:
               - awmouse
+
+  awmouse-watch:
+    type: application
+    platform: watchOS
+    sources:
+      - watch
+    dependencies:
+      # No MotionInput: the watch reads no sensor. Its face is a trackpad and
+      # its crown is a scroll wheel, and both are plain touch input.
+      - package: WatchBridge
+      - framework: Frameworks/Awmtunnel.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: space.keybo.awmouse.watchkitapp
+        # arm64 only. Go has no arm64_32 backend, so the tunnel exists for the
+        # 64-bit watches alone — Series 9, Ultra 2 and later.
+        ARCHS: arm64
+        MARKETING_VERSION: "0.3"
+        CURRENT_PROJECT_VERSION: "${BUILD_NUMBER}"
+        # A watch app has no icon catalog of its own yet; without this Xcode
+        # looks for one named AppIcon and warns on every build.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: watch/Info.plist
+      properties:
+        # watchOS 7 and later: one target, declared with WKApplication rather
+        # than the old WatchKit extension pair.
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: space.keybo.awmouse
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The other half of the Handoff pair; both must declare it.
+        NSUserActivityTypes:
+          - space.keybo.awmouse.control
