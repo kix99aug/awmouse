@@ -266,6 +266,27 @@ Platform notes that will otherwise cost an afternoon each:
 - **Windows** needs no click-count tracking and no drag-vs-move distinction:
   the OS derives double clicks from press timing itself, and a move while a
   button is held is already a drag.
+- **Windows** silently discards injected input aimed at a window owned by a
+  more privileged process — User Interface Privilege Isolation. A medium
+  integrity process (anything launched normally) cannot drive an elevated one,
+  and the failure reports nothing at all: `SendInput` returns 1, sets no error,
+  and the cursor does not move. Measured, not assumed: that is why
+  `TestMoveMovesRealCursor` once failed with a game in the foreground.
+
+  There is no way to detect it from the injection result, so the injector
+  instead compares its own token's integrity level against the foreground
+  window's and logs the explanation on transition. Comparing levels is exact;
+  inferring it from "the cursor did not move" would be wrong whenever the user
+  touches a physical mouse.
+
+  Three ways out, in order of cost. Run elevated — the whole process then sits
+  at high integrity and reaches elevated windows; a Task Scheduler entry with
+  highest privileges avoids the UAC prompt on every launch. Or ship a manifest
+  with `uiAccess="true"`, which is the route accessibility and remote-control
+  software takes: it bypasses UIPI *without* admin, but demands an Authenticode
+  signature from a trusted root and installation under a protected directory.
+  Nothing reaches the secure desktop — the UAC prompt itself, the lock screen,
+  Ctrl-Alt-Del — by design, at any privilege level.
 - **Linux** `uinput` sits *below* the display server, so one code path covers
   X11, Wayland, and console with no compositor-specific work. The alternative,
   `libei` + XDG RemoteDesktop portal, is the "blessed" Wayland route but needs

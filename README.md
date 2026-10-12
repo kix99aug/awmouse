@@ -19,7 +19,7 @@ Confirmed working on device.
 | Shared `MotionInput` package | working, unit tested |
 | QR pairing | host renders it; in-app scanner not built (manual entry works) |
 | tailcat transport | host side working, tested over a loopback relay; phone framework written, not yet bound or run on a device |
-| Windows injection (`SendInput`, absolute) | working — cursor test passes on a 200% display; not yet driven from the phone |
+| Windows injection (`SendInput`, absolute) | working, driven from the phone; cannot reach elevated windows unless run as administrator |
 | Linux injection (`uinput`) | not started |
 | watchOS app | not started |
 
@@ -174,12 +174,21 @@ make notarize NOTARY_PROFILE=awmouse
 The last line of `make notarize` is Gatekeeper's own verdict on the result
 and must read `accepted` / `source=Notarized Developer ID`.
 
-**Windows** needs no permission. Fyne needs cgo, so building requires a C
-compiler — MSYS2/mingw on Windows itself, or `brew install mingw-w64` to
-cross-compile from a Mac. High-DPI is confirmed on a single 200% display:
-the injector sees physical pixels, not the virtualised ones a DPI-unaware
-process gets. Multi-monitor is not yet tried — if the cursor cannot reach a
-second monitor, that is the `VIRTUALDESK` handling and worth reporting.
+**Windows** needs no permission, but it does have a privilege rule. Windows
+refuses injected input aimed at a window belonging to a more privileged
+process, so while an app running as administrator is in front, the cursor
+stops dead — and nothing on screen says why. Right-click awmouse › Run as
+administrator and it works; to skip the UAC prompt every launch, start it
+from a Task Scheduler entry with "run with highest privileges". The log says
+which window is blocking it, by name. The secure desktop — the UAC prompt,
+the lock screen, Ctrl-Alt-Del — is unreachable at any privilege level.
+
+Fyne needs cgo, so building requires a C compiler — MSYS2/mingw on Windows
+itself, or `brew install mingw-w64` to cross-compile from a Mac. High-DPI is
+confirmed on a single 200% display: the injector sees physical pixels, not
+the virtualised ones a DPI-unaware process gets. Multi-monitor is not yet
+tried — if the cursor cannot reach a second monitor, that is the
+`VIRTUALDESK` handling and worth reporting.
 
 **iOS:**
 

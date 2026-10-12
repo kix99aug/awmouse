@@ -207,10 +207,16 @@ func send(mi mouseInput) error {
 	// injects nothing on a mismatch, so the struct layout above is load-bearing.
 	n, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&in)), unsafe.Sizeof(in))
 	if n != 1 {
-		// Zero inserted: the input was blocked. Typically a UAC prompt or a
-		// locked desktop is in the way.
+		// Zero inserted: blocked before the queue, as the secure desktop does
+		// (the UAC prompt itself, the lock screen, Ctrl-Alt-Del). No amount of
+		// privilege reaches those.
 		return fmt.Errorf("SendInput injected nothing: %w", callErr)
 	}
+	// A success here is not proof the input arrived: UIPI discards events aimed
+	// at a more privileged window after SendInput has accepted them, reporting
+	// nothing at all. Diagnosing that is the only way the user learns why the
+	// cursor stopped.
+	warnIfForegroundBlocksInput()
 	return nil
 }
 
