@@ -48,7 +48,14 @@ func main() {
 	v := newView(ctx, fa, core, fa.Quit)
 	w.SetContent(v.root)
 	w.Resize(fyne.NewSize(380, 640))
-	w.SetFixedSize(true)
+
+	// Deliberately not SetFixedSize(true). The window's content changes height
+	// as it runs — the pairing code appears a second after launch, phones join
+	// the list — and on a fixed-size window Fyne grows the OS window to the new
+	// minimum without growing its own canvas with it. Everything is then drawn
+	// in a space shorter than the window: a band of empty at the top, and every
+	// click landing that far above where it looks like it should. Measured at
+	// 200% scaling: the window went to 728pt while the canvas stayed at 692.
 
 	// Closing the window hides it; the app keeps running in the tray, which is
 	// where Quit lives. A remote mouse that exits when its window closes is
