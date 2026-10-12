@@ -45,7 +45,7 @@ func main() {
 	}()
 
 	w := fa.NewWindow("awmouse")
-	v := newView(ctx, fa, core)
+	v := newView(ctx, fa, core, fa.Quit)
 	w.SetContent(v.root)
 	w.Resize(fyne.NewSize(380, 640))
 	w.SetFixedSize(true)

@@ -19,7 +19,7 @@ Confirmed working on device.
 | Shared `MotionInput` package | working, unit tested |
 | QR pairing | host renders it; in-app scanner not built (manual entry works) |
 | tailcat transport | host side working, tested over a loopback relay; phone framework written, not yet bound or run on a device |
-| Windows injection (`SendInput`, absolute) | working, driven from the phone; cannot reach elevated windows unless run as administrator |
+| Windows injection (`SendInput`, absolute) | working, driven from the phone; elevated windows need the host elevated too, which it offers at startup |
 | Linux injection (`uinput`) | not started |
 | watchOS app | not started |
 
@@ -177,11 +177,12 @@ and must read `accepted` / `source=Notarized Developer ID`.
 **Windows** needs no permission, but it does have a privilege rule. Windows
 refuses injected input aimed at a window belonging to a more privileged
 process, so while an app running as administrator is in front, the cursor
-stops dead — and nothing on screen says why. Right-click awmouse › Run as
-administrator and it works; to skip the UAC prompt every launch, start it
-from a Task Scheduler entry with "run with highest privileges". The log says
-which window is blocking it, by name. The secure desktop — the UAC prompt,
-the lock screen, Ctrl-Alt-Del — is unreachable at any privilege level.
+stops dead and Windows says nothing. awmouse explains this in a card at
+startup, with a "Restart as administrator" button and a checkbox to stop
+asking; staying unelevated is the default and is fine unless you actually
+use elevated apps. If it does happen, the log names the window that swallowed
+the input. The secure desktop — the UAC prompt, the lock screen,
+Ctrl-Alt-Del — is unreachable at any privilege level.
 
 Fyne needs cgo, so building requires a C compiler — MSYS2/mingw on Windows
 itself, or `brew install mingw-w64` to cross-compile from a Mac. High-DPI is

@@ -45,6 +45,7 @@ type view struct {
 	gainValue *widget.Label
 
 	permission fyne.CanvasObject
+	elevation  fyne.CanvasObject
 	failure    *widget.Label
 	retry      *widget.Button
 
@@ -57,7 +58,7 @@ type view struct {
 	codeFor string
 }
 
-func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
+func newView(ctx context.Context, fa fyne.App, core *app.App, quit func()) *view {
 	v := &view{core: core}
 	settings := core.Settings()
 
@@ -118,6 +119,14 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 	v.permission = permissionCard(fa)
 	v.permission.Hide()
 
+	// Unlike the permission card this is not driven by a Phase: it states a
+	// standing platform rule, so it is shown once at startup and then only
+	// dismissed, never re-shown by a status change.
+	v.elevation = elevationNotice(fa, quit)
+	if v.elevation == nil {
+		v.elevation = container.NewWithoutLayout()
+	}
+
 	v.failure = widget.NewLabel("")
 	v.failure.Wrapping = fyne.TextWrapWord
 	v.failure.Importance = widget.DangerImportance
@@ -133,6 +142,7 @@ func newView(ctx context.Context, fa fyne.App, core *app.App) *view {
 	v.root = container.NewPadded(container.NewVBox(
 		statusLine,
 		v.permission,
+		v.elevation,
 		v.failure,
 		container.NewCenter(v.retry),
 		container.NewCenter(v.code),

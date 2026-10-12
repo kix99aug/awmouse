@@ -525,4 +525,25 @@ Roughly in order of how likely they are to hurt:
    need a Mac.
 5. **Background execution** on iOS while the phone is pocketed and the watch is
    driving — may constrain how the relay stays alive.
+6. **Windows `uiAccess` — deferred, not rejected.** Running elevated is the
+   remedy the host offers today, via a notice at startup and a one-click
+   restart. A manifest with `uiAccess="true"` would be better: it bypasses
+   UIPI *without* admin rights, so elevated windows work while the host stays
+   at medium integrity and never raises a UAC prompt. The prerequisites are
+   what make it expensive, and all three are mandatory — Apple's Developer ID
+   does nothing for them:
+   - an Authenticode signature chaining to a root the machine already trusts,
+     which for public distribution means buying a Windows code-signing
+     certificate (OV, and since 2023 the key must live on an HSM or token);
+   - installation under a protected directory — `Program Files` or
+     `System32` — so a per-user or portable `.exe` is disqualified, meaning an
+     installer rather than today's `awmouse-win.zip`;
+   - `requestedExecutionLevel` left at `asInvoker` alongside it, since
+     `uiAccess` and elevation are separate axes and asking for both is what
+     makes the UAC prompt come back.
+
+   Worth doing when awmouse is given to people who are not the author, since
+   "approve a UAC prompt to use your mouse" is a bad first run. Not worth it
+   while the audience is one machine. Either way it never reaches the secure
+   desktop.
 ```
