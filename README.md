@@ -54,8 +54,9 @@ will not relaunch it for anything until you open it yourself. When that is the
 case the watch fills its screen with *Open awmouse on your iPhone*, and your
 phone offers awmouse on its lock screen so it is one tap away.
 
-The computer button in the top-left corner lists every computer the phone has
-paired with; picking one switches the phone to it.
+The gear in the top-left corner opens the settings: the watch's cursor speed,
+on top of the computer's acceleration, and every computer the phone has paired
+with — picking one switches the phone to it.
 
 It needs watchOS 11 or later.
 

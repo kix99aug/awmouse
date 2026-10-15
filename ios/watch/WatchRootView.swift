@@ -15,7 +15,7 @@ struct WatchRootView: View {
     /// does nothing.
     @FocusState private var crownFocused: Bool
 
-    @State private var picking = false
+    @State private var showingSettings = false
 
     /// Active only with the screen awake and the app in front. Wrist down,
     /// the watch keeps the app on screen but stops running it normally, which
@@ -29,24 +29,19 @@ struct WatchRootView: View {
             } else {
                 // A navigation stack for one thing: it is what gives a watch
                 // app the toolbar slot in the top corner beside the clock,
-                // which is otherwise dead space, and that is where choosing a
-                // computer lives.
+                // which is otherwise dead space, and that is where settings
+                // live.
                 NavigationStack {
                     pad
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                if let computers = controller.status?.computers, !computers.isEmpty {
-                                    Button { picking = true } label: {
-                                        Image(systemName: "desktopcomputer")
-                                    }
+                                Button { showingSettings = true } label: {
+                                    Image(systemName: "gearshape")
                                 }
                             }
                         }
-                        .sheet(isPresented: $picking) {
-                            ComputerPicker(
-                                computers: controller.status?.computers ?? [],
-                                current: controller.status?.current,
-                                choose: controller.choose)
+                        .sheet(isPresented: $showingSettings) {
+                            SettingsView().environmentObject(controller)
                         }
                 }
             }
@@ -197,33 +192,53 @@ private struct PhoneMissingView: View {
     }
 }
 
-/// The phone's computers, one tap each. The current one is ticked.
-private struct ComputerPicker: View {
-    let computers: [KnownComputer]
-    let current: KnownComputer?
-    let choose: (KnownComputer) -> Void
-
+/// The watch's settings, on one page: how fast the cursor follows the finger,
+/// and which of the phone's computers it drives.
+private struct SettingsView: View {
+    @EnvironmentObject private var controller: WatchController
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            List(computers) { computer in
-                Button {
-                    choose(computer)
-                    dismiss()
-                } label: {
-                    HStack {
-                        Text(WatchRootView.label(computer))
-                            .lineLimit(1)
-                        Spacer()
-                        if computer.id == current?.id {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(Color.accentColor)
+            List {
+                Section {
+                    // A stepper rather than a slider: each press is a step
+                    // the hand can feel and count, and the crown turns it too.
+                    Stepper(value: $controller.speed, in: WatchController.speedRange, step: 0.25) {
+                        Text(controller.speed, format: .number.precision(.fractionLength(0...2)))
+                            + Text("×")
+                    }
+                } header: {
+                    Text("Cursor speed")
+                } footer: {
+                    Text("On top of the computer's acceleration. Faster flicks gain more.")
+                }
+
+                Section("Computer") {
+                    let computers = controller.status?.computers ?? []
+                    if computers.isEmpty {
+                        Text(controller.reachable ? "Pair a computer on iPhone" : "Waiting for iPhone")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(computers) { computer in
+                        Button {
+                            controller.choose(computer)
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text(WatchRootView.label(computer))
+                                    .lineLimit(1)
+                                Spacer()
+                                if computer.id == controller.status?.current?.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
                         }
                     }
                 }
             }
-            .navigationTitle("Computers")
+            .navigationTitle("Settings")
         }
     }
 }

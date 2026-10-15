@@ -54,7 +54,24 @@ final class WatchController: ObservableObject {
     /// and this is a different instrument.
     private let crownScale = 20.0
 
+    /// The watch's own multiplier on finger movement, applied before the
+    /// host's acceleration curve.
+    ///
+    /// The host's curve is shared with the phone and tuned for it, and the
+    /// watch face is about half as wide: the same curve made the watch feel
+    /// slow, a display taking several swipes to cross. Scaling here leaves
+    /// the phone alone. The interval is left as it was, so the host reads a
+    /// faster finger and accelerates harder too — a fast flick gains more
+    /// than a slow nudge, which is the point of scaling a small surface.
+    @Published var speed: Double {
+        didSet { UserDefaults.standard.set(speed, forKey: Self.speedKey) }
+    }
+    static let speedRange: ClosedRange<Double> = 0.5...4
+    private static let speedKey = "pointerSpeed"
+
     init() {
+        let stored = UserDefaults.standard.double(forKey: Self.speedKey)
+        speed = stored == 0 ? 1 : min(max(stored, Self.speedRange.lowerBound), Self.speedRange.upperBound)
         link.$status.assign(to: &$status)
     }
 
@@ -118,7 +135,7 @@ final class WatchController: ObservableObject {
     /// curve, so a 40 mm screen and a 6" one need no different handling here.
     func trackpadMoved(dx: Double, dy: Double, dt: Double) {
         guard canReachCursor else { return }
-        link.move(dx: dx, dy: dy, dt: dt)
+        link.move(dx: dx * speed, dy: dy * speed, dt: dt)
     }
 
     /// Crown rotation. The crown is a scroll wheel that happens to be attached
