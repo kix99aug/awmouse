@@ -21,7 +21,9 @@ final class WatchController: ObservableObject {
     /// that worked look exactly alike.
     @Published private(set) var lastAction: String?
 
-    /// Whether the phone app is answering right now.
+    /// Whether the phone app is answering right now — its heartbeat, not
+    /// WatchConnectivity's `isReachable`, which on a watch only means the
+    /// iPhone is nearby and stays true with the app suspended or gone.
     @Published private(set) var reachable = false
 
     /// The phone app has been unreachable for longer than it takes to wake
@@ -39,7 +41,7 @@ final class WatchController: ObservableObject {
     /// How long the phone app may stay out of reach before the watch gives up
     /// on waking it and asks the user. A background launch from the watch's
     /// wake request usually lands in a second or two.
-    private let patience: Duration = .seconds(4)
+    private let patience: Duration = .seconds(3)
 
     /// How much scroll one detent of the crown is worth.
     ///
@@ -57,7 +59,7 @@ final class WatchController: ObservableObject {
 
     func activate() {
         guard watching.isEmpty else { return }
-        link.$reachable
+        link.$alive
             .removeDuplicates()
             .sink { [weak self] in self?.reachabilityChanged($0) }
             .store(in: &watching)

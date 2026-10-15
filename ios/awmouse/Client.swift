@@ -168,6 +168,27 @@ final class Client: ObservableObject {
         }
     }
 
+    /// Checks the link now rather than at the next ping.
+    ///
+    /// For an app that has just been woken from suspension by the watch.
+    /// Whether the tunnel survived the suspension is anybody's guess, and the
+    /// regular pings take three misses five seconds apart to decide — a quarter
+    /// of a minute of the watch's input going nowhere. One ping answers it.
+    func verifyLink() {
+        guard state == .connected, let current = link as? TunnelLink, !verifying else { return }
+        verifying = true
+        Task { [weak self] in
+            let alive = (try? await current.ping()) != nil
+            guard let self else { return }
+            self.verifying = false
+            guard !alive, self.link === current else { return }
+            self.failed("host stopped responding")
+            self.connectForRemoteUse()
+        }
+    }
+
+    private var verifying = false
+
     /// Someone has picked up the watch. That is a fresh intention to drive
     /// the cursor, so it overrides a deliberate Disconnect — unlike a view
     /// merely appearing, which is what `reconnectIfNeeded` guards against.

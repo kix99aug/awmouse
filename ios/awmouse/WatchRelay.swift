@@ -19,13 +19,23 @@ final class WatchRelay {
     private unowned let client: Client
     private var watching: Set<AnyCancellable> = []
 
+    /// For the log: when the watch last checked in, and how much it sent.
+    private var lastPing = Date.distantPast
+    private var relayed = 0
+    private var dropped = 0
+    private var tally: Task<Void, Never>?
+
     init(client: Client) {
         self.client = client
         receiver.onEvent = { [weak self] in self?.apply($0) }
         receiver.onPick = { [weak self] in self?.pick($0) }
         // Woken by the watch with no window: someone is holding the watch
         // and wants the cursor.
-        receiver.onWake = { [weak self] in self?.client.connectForRemoteUse() }
+        receiver.onWake = { [weak self] in
+            RelayLog.note("woken by watch")
+            self?.client.connectForRemoteUse()
+        }
+        receiver.onPing = { [weak self] in self?.pinged() }
     }
 
     func activate() {
@@ -33,6 +43,11 @@ final class WatchRelay {
         // change twice.
         guard watching.isEmpty else { return }
         receiver.activate()
+
+        client.$state
+            .removeDuplicates()
+            .sink { RelayLog.note("client \($0)") }
+            .store(in: &watching)
 
         client.$state
             .combineLatest(client.$attempting, client.$hosts)
@@ -67,10 +82,24 @@ final class WatchRelay {
         KnownComputer(id: host.address, name: host.name)
     }
 
+    /// The watch checks in every two seconds while its app is open. A longer
+    /// gap means this app was not running to answer — suspended, most likely,
+    /// and woken just now by this very message — and the tunnel may not have
+    /// survived that.
+    private func pinged() {
+        let gap = Date().timeIntervalSince(lastPing)
+        lastPing = Date()
+        if gap > 6 && gap < .infinity {
+            RelayLog.note(String(format: "watch ping after %.0fs gap; checking link", gap))
+            client.verifyLink()
+        }
+    }
+
     /// The watch's computer picker. An explicit choice, like tapping the
     /// computer in the phone's own list.
     private func pick(_ id: String) {
         guard let host = client.hosts.first(where: { $0.address == id }) else { return }
+        RelayLog.note("watch picked \(host.name)")
         client.connect(to: host)
     }
 
@@ -80,6 +109,7 @@ final class WatchRelay {
         // sets state to connecting at once, so a stream of events produces one
         // dial, not thirty a second — and the event itself is dropped: there
         // is nowhere yet for a cursor movement to go.
+        countEvent(relayed: client.state == .connected)
         guard client.state == .connected else {
             client.connectForRemoteUse()
             return
@@ -94,6 +124,23 @@ final class WatchRelay {
             client.click(button.asMouseButton)
         case .button(let button, let down):
             client.button(button.asMouseButton, down: down)
+        }
+    }
+}
+
+extension WatchRelay {
+    /// Counts rather than lines: one per movement would bury everything else.
+    /// Written out every few seconds while events are arriving.
+    fileprivate func countEvent(relayed ok: Bool) {
+        if ok { relayed += 1 } else { dropped += 1 }
+        guard tally == nil else { return }
+        tally = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self else { return }
+            RelayLog.note("relayed \(self.relayed), dropped \(self.dropped) while not connected")
+            self.relayed = 0
+            self.dropped = 0
+            self.tally = nil
         }
     }
 }

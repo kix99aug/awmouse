@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// The objects that outlive any view, in one place so that both SwiftUI and
 /// the app delegate can reach the same instances.
@@ -21,6 +22,16 @@ final class AppCore {
     /// Called from the app delegate, on every launch including the silent
     /// ones.
     func start() {
+        RelayLog.note("launch, \(UIApplication.shared.applicationState == .background ? "in background" : "in foreground")")
+        for (name, label) in [
+            (UIApplication.didEnterBackgroundNotification, "entered background"),
+            (UIApplication.willEnterForegroundNotification, "entering foreground"),
+            (UIApplication.willTerminateNotification, "terminating"),
+        ] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                RelayLog.note(label)
+            }
+        }
         watch.activate()
     }
 }
