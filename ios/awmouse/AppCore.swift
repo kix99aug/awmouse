@@ -15,6 +15,10 @@ final class AppCore {
     static let shared = AppCore()
 
     let client = Client()
+
+    /// When this process started. The watch relay uses it to tell a process
+    /// just launched by the watch from one that has been running a while.
+    let launchedAt = Date()
     lazy var air = AirMouse(client: client)
     lazy var watch = WatchRelay(client: client)
 

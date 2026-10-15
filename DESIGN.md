@@ -540,6 +540,20 @@ attacker a WireGuard session and a refusal.
   brought the app back within a few seconds, the watch gives its whole screen
   to saying so, and advertises Handoff so the phone offers awmouse on its lock
   screen — one tap instead of going to find it.
+- **The relay's live messaging can stall for good, and only a new phone
+  process clears it.** Both apps log their session; twice, about three
+  minutes after the phone app was launched in the background, the watch's
+  messages stopped being answered while its queued transfers kept arriving and
+  every session property on both sides still read healthy. Bringing the phone
+  app to the front did not clear it; restarting the watch app did not; a new
+  phone process did. So a wake request reaching a phone process that has been
+  running a while is taken as that stall: in the background the app ends
+  itself and the watch's next request launches a fresh one; in front it shows
+  a banner asking to be reopened. The watch waits before its first request, so
+  a phone app that merely has not answered yet is not restarted.
+  Every message is answered with the phone's status, and the watch sends the
+  next only after the answer — at a fixed 30 Hz without waiting, sends began
+  failing outright with IDS errors.
 - **The phone keeps a list of computers, not just the last one.** A person
   with a laptop and a desktop pairs with both and picks; the most recent is
   reconnected to without being asked, and the rest are one tap away when that

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import UIKit
 import WatchBridge
 
 /// The phone's half of the watch link: takes what the watch sends and feeds it
@@ -14,7 +15,12 @@ import WatchBridge
 /// produces exactly the events the phone's trackpad produces, so there is
 /// nothing to translate.
 @MainActor
-final class WatchRelay {
+final class WatchRelay: ObservableObject {
+    /// The watch is not hearing this app, and the app is in front, where it
+    /// will not end itself; see `wokenByWatch`. Shown as a banner asking for
+    /// the restart that fixes it.
+    @Published private(set) var stalled = false
+
     private let receiver = WatchReceiver()
     private unowned let client: Client
     private var watching: Set<AnyCancellable> = []
@@ -23,6 +29,7 @@ final class WatchRelay {
     private var lastPing = Date.distantPast
     private var relayed = 0
     private var dropped = 0
+    private var heard = 0
     private var tally: Task<Void, Never>?
 
     init(client: Client) {
@@ -31,10 +38,7 @@ final class WatchRelay {
         receiver.onPick = { [weak self] in self?.pick($0) }
         // Woken by the watch with no window: someone is holding the watch
         // and wants the cursor.
-        receiver.onWake = { [weak self] in
-            RelayLog.note("woken by watch")
-            self?.client.connectForRemoteUse()
-        }
+        receiver.onWake = { [weak self] in self?.wokenByWatch() }
         receiver.onPing = { [weak self] in self?.pinged() }
     }
 
@@ -98,12 +102,50 @@ final class WatchRelay {
     private func pinged() {
         let gap = Date().timeIntervalSince(lastPing)
         lastPing = Date()
+        stalled = false
+        heard += 1
+        startTally()
         if gap > 6 && gap < .infinity {
             // The same threshold the delegate used when it answered this
             // message "reconnecting".
             RelayLog.note(String(format: "watch ping after %.0fs gap; checking link", gap))
             client.verifyLink()
         }
+    }
+
+    /// The watch asked this app to be running.
+    ///
+    /// The watch sends that only after its messages have gone unanswered for
+    /// a few seconds. Arriving at a process that has just been launched, it is
+    /// the launch doing its job. Arriving at one that has been running a while,
+    /// it means the watch is not hearing this process — and the logs showed
+    /// what that is: about three minutes into running in the background, iOS
+    /// suspends the app, and WatchConnectivity's live messaging to that
+    /// process stops for good, in both directions, while queued transfers like
+    /// this one keep arriving and every session property still reads healthy.
+    /// It survived the app being brought to the front. Only a new process
+    /// recovered it.
+    ///
+    /// So a process in that state ends itself, and the watch's next wake
+    /// request launches a fresh one in the background, which works. Only in
+    /// the background, where nobody is looking at the app; in front, it asks.
+    /// An app ending itself is not something App Review likes, and this is
+    /// the one place it happens.
+    private func wokenByWatch() {
+        let age = Date().timeIntervalSince(AppCore.shared.launchedAt)
+        guard age > 10 else {
+            RelayLog.note("woken by watch")
+            client.connectForRemoteUse()
+            return
+        }
+        let quiet = Date().timeIntervalSince(lastPing)
+        RelayLog.note(String(format: "wake request %.0fs into this process, %.1fs since last message: watch is not hearing us", age, quiet))
+        if UIApplication.shared.applicationState == .background {
+            RelayLog.note("ending this process so the watch can launch a fresh one")
+            RelayLog.flush()
+            exit(0)
+        }
+        stalled = true
     }
 
     /// The watch's computer picker. An explicit choice, like tapping the
@@ -144,11 +186,19 @@ extension WatchRelay {
     /// Written out every few seconds while events are arriving.
     fileprivate func countEvent(relayed ok: Bool) {
         if ok { relayed += 1 } else { dropped += 1 }
+        startTally()
+    }
+
+    /// Every message counts, heartbeats included: with only events counted,
+    /// a watch that was idle and a watch that could not get through looked
+    /// the same.
+    fileprivate func startTally() {
         guard tally == nil else { return }
         tally = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard let self else { return }
-            RelayLog.note("relayed \(self.relayed), dropped \(self.dropped) while not connected")
+            RelayLog.note("heard \(self.heard) messages; relayed \(self.relayed), dropped \(self.dropped) while not connected")
+            self.heard = 0
             self.relayed = 0
             self.dropped = 0
             self.tally = nil

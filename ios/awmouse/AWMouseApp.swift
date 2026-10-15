@@ -53,13 +53,30 @@ struct AWMouseApp: App {
 
 struct RootView: View {
     @EnvironmentObject private var client: Client
+    @ObservedObject private var watch = AppCore.shared.watch
 
     var body: some View {
-        switch client.state {
-        case .connected:
-            TrackpadView()
-        default:
-            ConnectView()
+        Group {
+            switch client.state {
+            case .connected:
+                TrackpadView()
+            default:
+                ConnectView()
+            }
         }
+        .safeAreaInset(edge: .top) {
+            if watch.stalled { stalledBanner }
+        }
+    }
+
+    /// The watch link has stalled in a way only a fresh process fixes, and
+    /// the app is in front, where it will not end itself under the user.
+    private var stalledBanner: some View {
+        Label("The watch lost its link to this app. Swipe awmouse away in the app switcher and open it again.",
+              systemImage: "applewatch.slash")
+            .font(.footnote)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.2))
     }
 }

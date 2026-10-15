@@ -233,11 +233,23 @@ public final class PhoneLink: ObservableObject {
     /// every sleep, for a phone app that was there all along.
     private var active = true
     private var resumedAt = Date.distantPast
+    private var startedAt = Date.distantPast
+
+    /// How long unanswered before asking for the phone app to be launched.
+    /// Not at once: the phone treats a wake request reaching a process that
+    /// has been running as a sign its messaging is broken, and restarts. A
+    /// request sent the moment this app opens, before the first heartbeat had
+    /// time to be answered, would restart a phone app that was fine.
+    private let wakeAfter: TimeInterval = 2.5
+    /// And then how often. Each one that reaches a stuck phone app ends it
+    /// and the next launches a fresh one, so this sets the pace of recovery.
+    private let wakeEvery: TimeInterval = 3
 
     public init() {}
 
     public func activate() {
         guard WCSession.isSupported(), timer == nil else { return }
+        startedAt = Date()
         delegate.onReachability = { [weak self] in
             self?.reachable = $0
             if $0 { self?.pump() }
@@ -409,12 +421,12 @@ public final class PhoneLink: ObservableObject {
             noteFailure("no reply in \(Int(replyTimeout))s")
             finished(tag, answer: nil, ok: false)
         }
-        let heardFrom = max(lastReply, resumedAt)
+        let heardFrom = max(lastReply, resumedAt, startedAt)
         if alive && now.timeIntervalSince(heardFrom) > aliveFor { alive = false }
         if inFlight == nil && queue.isEmpty && now.timeIntervalSince(max(lastReply, sentAt)) >= pingEvery {
             enqueue(nil)
         }
-        if !alive { wakePhone() }
+        if now.timeIntervalSince(heardFrom) > wakeAfter { wakePhone() }
     }
 
     /// Two moves in a row are sent as one, and two scrolls: ten small moves
@@ -446,7 +458,7 @@ public final class PhoneLink: ObservableObject {
     private func wakePhone() {
         let session = WCSession.default
         guard session.activationState == .activated else { return }
-        guard Date().timeIntervalSince(lastWake) > 5 else { return }
+        guard Date().timeIntervalSince(lastWake) >= wakeEvery else { return }
         lastWake = Date()
         // Undelivered transfers pile up, and a phone that comes back later
         // would otherwise be woken once for each.

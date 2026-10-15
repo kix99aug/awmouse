@@ -39,9 +39,11 @@ final class WatchController: ObservableObject {
     private var active = true
 
     /// How long the phone app may stay out of reach before the watch gives up
-    /// on waking it and asks the user. A background launch from the watch's
-    /// wake request usually lands in a second or two.
-    private let patience: Duration = .seconds(3)
+    /// on waking it and asks the user. Long enough to cover the phone
+    /// recovering on its own — a stuck phone app ends itself on the first wake
+    /// request and the next one launches it fresh, a few seconds in all — so
+    /// that the notice means the app really is gone, not that it is restarting.
+    private let patience: Duration = .seconds(5)
 
     /// How much scroll one detent of the crown is worth.
     ///

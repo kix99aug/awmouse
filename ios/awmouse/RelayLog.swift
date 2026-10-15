@@ -16,6 +16,12 @@ enum RelayLog {
     private static let cap = 256 * 1024
     private static let queue = DispatchQueue(label: "awmouse.relaylog")
 
+    /// Waits until everything noted has reached the file. For the moment
+    /// before the app ends itself, when an asynchronous write would be lost.
+    static func flush() {
+        queue.sync {}
+    }
+
     static func note(_ text: String) {
         let stamp = Date().formatted(.iso8601.time(includingFractionalSeconds: true))
         let line = Data("\(stamp) \(text)\n".utf8)
