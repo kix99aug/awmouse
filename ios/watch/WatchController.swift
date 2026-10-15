@@ -37,6 +37,7 @@ final class WatchController: ObservableObject {
     let link = PhoneLink()
     private var watching: Set<AnyCancellable> = []
     private var missingTimer: Task<Void, Never>?
+    private var active = true
 
     /// How long the phone app may stay out of reach before the watch gives up
     /// on waking it and asks the user. A background launch from the watch's
@@ -66,18 +67,38 @@ final class WatchController: ObservableObject {
         link.activate()
     }
 
+    /// Whether the watch app is in front and awake. Asleep, nothing it
+    /// hears or fails to hear about the phone is evidence of anything, so no
+    /// verdict is reached until it is awake again.
+    func setActive(_ active: Bool) {
+        guard active != self.active else { return }
+        self.active = active
+        link.setActive(active)
+        if active {
+            if !reachable { startMissingTimer() }
+        } else {
+            missingTimer?.cancel()
+            missingTimer = nil
+        }
+    }
+
     private func reachabilityChanged(_ now: Bool) {
         reachable = now
         missingTimer?.cancel()
         missingTimer = nil
         if now {
             phoneMissing = false
-            return
+        } else if active {
+            startMissingTimer()
         }
+    }
+
+    private func startMissingTimer() {
+        missingTimer?.cancel()
         missingTimer = Task { [weak self] in
             guard let patience = self?.patience else { return }
             try? await Task.sleep(for: patience)
-            guard let self, !Task.isCancelled, !self.reachable else { return }
+            guard let self, !Task.isCancelled, self.active, !self.reachable else { return }
             self.phoneMissing = true
         }
     }

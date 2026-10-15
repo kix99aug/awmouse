@@ -121,6 +121,14 @@ public final class PhoneLink: ObservableObject {
     private var lastPing = Date.distantPast
     private var lastReply = Date.distantPast
 
+    /// Whether the watch app is in front and awake. While it is not —
+    /// the wrist is down, the screen asleep — the system throttles or
+    /// suspends this app, the heartbeat stops, and silence from the phone
+    /// means nothing. Treating it as an answer once showed "open the phone
+    /// app" on every sleep, for a phone app that was there all along.
+    private var active = true
+    private var resumedAt = Date.distantPast
+
     /// How often the watch asks, and how long without an answer before the
     /// phone app counts as gone. Two missed beats, plus slack for a phone app
     /// that has to be woken to answer.
@@ -161,6 +169,7 @@ public final class PhoneLink: ObservableObject {
                 try? await Task.sleep(for: self?.interval ?? .milliseconds(33))
                 guard let self else { return }
                 self.flush()
+                guard self.active else { continue }
                 self.heartbeat()
                 // While this app is open and the phone app is not answering,
                 // keep asking it to be there. wakePhone rate-limits itself,
@@ -174,9 +183,21 @@ public final class PhoneLink: ObservableObject {
     /// wakes a suspended phone app to answer it, which is also what keeps the
     /// relay usable after the phone has been put down: an app that is never
     /// asked anything is suspended, and a suspended app relays nothing.
+    /// Tells the link whether the watch app is in front and awake.
+    public func setActive(_ active: Bool) {
+        guard active != self.active else { return }
+        self.active = active
+        guard active else { return }
+        // Back from sleep: ask at once, and give the answer the usual time to
+        // arrive before the silence before it counts against the phone.
+        resumedAt = Date()
+        lastPing = .distantPast
+    }
+
     private func heartbeat() {
         let now = Date()
-        if alive && now.timeIntervalSince(lastReply) > aliveFor { alive = false }
+        let heardFrom = max(lastReply, resumedAt)
+        if alive && now.timeIntervalSince(heardFrom) > aliveFor { alive = false }
         guard now.timeIntervalSince(lastPing) >= pingEvery else { return }
         let session = WCSession.default
         guard session.activationState == .activated, session.isReachable else { return }

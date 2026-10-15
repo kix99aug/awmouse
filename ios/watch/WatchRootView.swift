@@ -17,6 +17,11 @@ struct WatchRootView: View {
 
     @State private var picking = false
 
+    /// Active only with the screen awake and the app in front. Wrist down,
+    /// the watch keeps the app on screen but stops running it normally, which
+    /// the controller must not mistake for the phone going quiet.
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         Group {
             if controller.phoneMissing {
@@ -54,6 +59,9 @@ struct WatchRootView: View {
         .userActivity(controlActivityType, isActive: !controller.reachable) { activity in
             activity.title = "awmouse"
             activity.isEligibleForHandoff = true
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            controller.setActive(phase == .active)
         }
     }
 
