@@ -202,16 +202,25 @@ private struct SettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    // A stepper rather than a slider: each press is a step
-                    // the hand can feel and count, and the crown turns it too.
-                    Stepper(value: $controller.speed, in: WatchController.speedRange, step: 0.25) {
-                        Text(controller.speed, format: .number.precision(.fractionLength(0...2)))
-                            + Text("×")
+                    // Two buttons rather than a Stepper. A watchOS Stepper
+                    // takes the crown when it has focus, and in a list the
+                    // crown is what scrolls — the two fought.
+                    HStack(spacing: 0) {
+                        speedButton("minus", by: -1,
+                                    disabled: controller.speed <= WatchController.speedRange.lowerBound)
+                        Spacer(minLength: 4)
+                        Text(controller.speed, format: .number.precision(.fractionLength(0...1)))
+                            .font(.system(size: 17, weight: .semibold).monospacedDigit())
+                            + Text("×").font(.system(size: 14))
+                        Spacer(minLength: 4)
+                        speedButton("plus", by: +1,
+                                    disabled: controller.speed >= WatchController.speedRange.upperBound)
                     }
+                    .lineLimit(1)
                 } header: {
                     Text("Cursor speed")
                 } footer: {
-                    Text("On top of the computer's acceleration. Faster flicks gain more.")
+                    Text("On top of the computer's acceleration.")
                 }
 
                 Section("Computer") {
@@ -240,5 +249,19 @@ private struct SettingsView: View {
             }
             .navigationTitle("Settings")
         }
+    }
+
+    /// Plain-styled, so that each is its own target: two default buttons in
+    /// one list row make the whole row one button.
+    private func speedButton(_ symbol: String, by steps: Int, disabled: Bool) -> some View {
+        Button { controller.stepSpeed(by: steps) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .bold))
+                .frame(width: 36, height: 30)
+                .background(Circle().fill(Color.gray.opacity(0.3)))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.35 : 1)
     }
 }

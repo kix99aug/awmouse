@@ -66,12 +66,25 @@ final class WatchController: ObservableObject {
     @Published var speed: Double {
         didSet { UserDefaults.standard.set(speed, forKey: Self.speedKey) }
     }
-    static let speedRange: ClosedRange<Double> = 0.5...4
+    static let speedRange: ClosedRange<Double> = 1...4
+    static let speedStep = 0.5
     private static let speedKey = "pointerSpeed"
+
+    /// Onto the grid the settings offer, so a value stored under an older
+    /// range or step still shows as one of the choices.
+    static func snapped(_ value: Double) -> Double {
+        let onGrid = (value / speedStep).rounded() * speedStep
+        return min(max(onGrid, speedRange.lowerBound), speedRange.upperBound)
+    }
+
+    /// One step faster or slower, by -1 or +1.
+    func stepSpeed(by steps: Int) {
+        speed = Self.snapped(speed + Double(steps) * Self.speedStep)
+    }
 
     init() {
         let stored = UserDefaults.standard.double(forKey: Self.speedKey)
-        speed = stored == 0 ? 1 : min(max(stored, Self.speedRange.lowerBound), Self.speedRange.upperBound)
+        speed = stored == 0 ? 1 : Self.snapped(stored)
         link.$status.assign(to: &$status)
     }
 
