@@ -73,9 +73,6 @@ struct WatchRootView: View {
             .overlay(alignment: .top) {
                 status.padding(.horizontal, 6).allowsHitTesting(false)
             }
-            .overlay(alignment: .bottom) {
-                hint.padding(.bottom, 4).allowsHitTesting(false)
-            }
             .focusable(true)
             .focused($crownFocused)
             .onAppear { crownFocused = true }
@@ -98,13 +95,18 @@ struct WatchRootView: View {
             // Out of reach, but not for long enough to give up: the watch is
             // waking it.
             dot(.yellow, "iPhone", detail: "waking", busy: true)
+        } else if !controller.confirmed {
+            // Awake again after a long sleep, waiting for the phone's first
+            // answer. What it said before the sleep is stale.
+            dot(.yellow, controller.status?.current.map(Self.label) ?? "iPhone",
+                detail: "reconnecting", busy: true)
         } else if let status = controller.status {
             let name = status.current.map(Self.label)
             switch status.phase {
             case .connected:
                 dot(.green, name ?? "connected")
             case .connecting:
-                dot(.yellow, name ?? "computer", detail: "connecting", busy: true)
+                dot(.yellow, name ?? "computer", detail: status.note ?? "connecting", busy: true)
             case .idle:
                 if status.computers.isEmpty {
                     dot(.orange, "pair a computer on iPhone")
@@ -151,14 +153,6 @@ struct WatchRootView: View {
                     .lineLimit(1)
                     .layoutPriority(1)
             }
-        }
-    }
-
-    @ViewBuilder private var hint: some View {
-        if let action = controller.lastAction {
-            Text(action)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
         }
     }
 }

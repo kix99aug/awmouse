@@ -31,6 +31,32 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
     }
     private let lock = NSLock()
     private var stored: PhoneStatus?
+    private var lastMessage = Date.distantPast
+
+    /// How long the watch can go quiet before its next message means this
+    /// app was probably suspended in between. The watch checks in at least
+    /// every two seconds while it is awake.
+    static let suspensionGap: TimeInterval = 6
+
+    /// The answer for a message arriving now. Usually the snapshot; but after
+    /// a long silence this app has most likely just been woken from
+    /// suspension, and whether the tunnel survived is not known yet — the
+    /// snapshot's "connected" is from before. Saying so on the very first
+    /// answer is what lets the watch show "reconnecting" instead of a green
+    /// light over a link that may be dead.
+    private func answer() -> PhoneStatus? {
+        lock.withLock {
+            let now = Date()
+            let gap = now.timeIntervalSince(lastMessage)
+            lastMessage = now
+            guard var status = stored else { return nil }
+            if gap > Self.suspensionGap && gap < .infinity && status.phase == .connected {
+                status.phase = .connecting
+                status.note = "reconnecting"
+            }
+            return status
+        }
+    }
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState,
                  error: Error?) {
@@ -68,7 +94,7 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
     /// the handler is not Sendable and must not wait for the main actor.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any],
                  replyHandler: @escaping ([String: Any]) -> Void) {
-        replyHandler(reply?.payload ?? [:])
+        replyHandler(answer()?.payload ?? [:])
         // Any message is the watch checking in, not only a heartbeat: while
         // the cursor is moving, the events are the heartbeat.
         Task { @MainActor in self.onPing?() }
@@ -122,8 +148,20 @@ public final class PhoneLink: ObservableObject {
     /// on the wrist, and are completely different faults.
     @Published public private(set) var status: PhoneStatus?
 
+    /// False from waking after a long sleep until the phone's first answer.
+    /// Everything known about the phone then is from before the sleep, and
+    /// the phone app has very likely been suspended in the meantime: showing
+    /// that old "connected" as green, while the phone wakes and re-checks its
+    /// link, is how the cursor came to lag five or ten seconds behind a
+    /// green light.
+    @Published public private(set) var confirmed = true
+
     private let delegate = SessionDelegate()
     private var timer: Task<Void, Never>?
+    private var inactiveSince: Date?
+
+    /// A sleep this short is a turned wrist, not a suspended phone app.
+    private let longSleep: TimeInterval = 10
     private var lastWake = Date.distantPast
     private var lastReply = Date.distantPast
 
@@ -191,7 +229,14 @@ public final class PhoneLink: ObservableObject {
     public func setActive(_ active: Bool) {
         guard active != self.active else { return }
         self.active = active
-        guard active else { return }
+        guard active else {
+            inactiveSince = Date()
+            return
+        }
+        if let since = inactiveSince, Date().timeIntervalSince(since) > longSleep {
+            confirmed = false
+        }
+        inactiveSince = nil
         // Back from sleep: ask at once, and give the answer the usual time to
         // arrive before the silence before it counts against the phone.
         resumedAt = Date()
@@ -280,6 +325,7 @@ public final class PhoneLink: ObservableObject {
         if ok {
             lastReply = Date()
             alive = true
+            confirmed = true
             // An empty answer is a phone app that has not worked out its
             // status yet; keep what was there.
             if let answer { status = answer }

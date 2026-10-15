@@ -178,7 +178,10 @@ final class Client: ObservableObject {
         guard state == .connected, let current = link as? TunnelLink, !verifying else { return }
         verifying = true
         Task { [weak self] in
-            let alive = (try? await current.ping()) != nil
+            // Shorter than the regular pings' timeout: someone is holding a
+            // watch waiting for the answer, and a live tunnel answers in well
+            // under a second. A dead one is quicker to replace than to mourn.
+            let alive = (try? await current.ping(timeoutMillis: 1_500)) != nil
             guard let self else { return }
             self.verifying = false
             guard !alive, self.link === current else { return }
@@ -187,7 +190,9 @@ final class Client: ObservableObject {
         }
     }
 
-    private var verifying = false
+    /// True while `verifyLink` is waiting on its ping — the link is
+    /// nominally up but not yet known to have survived.
+    @Published private(set) var verifying = false
 
     /// Someone has picked up the watch. That is a fresh intention to drive
     /// the cursor, so it overrides a deliberate Disconnect — unlike a view

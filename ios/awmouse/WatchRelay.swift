@@ -50,17 +50,22 @@ final class WatchRelay {
             .store(in: &watching)
 
         client.$state
-            .combineLatest(client.$attempting, client.$hosts)
-            .sink { [weak self] state, current, hosts in
-                self?.publish(state: state, current: current, hosts: hosts)
+            .combineLatest(client.$attempting, client.$hosts, client.$verifying)
+            .sink { [weak self] state, current, hosts, verifying in
+                self?.publish(state: state, current: current, hosts: hosts, verifying: verifying)
             }
             .store(in: &watching)
     }
 
-    private func publish(state: Client.State, current: KnownHost?, hosts: [KnownHost]) {
+    private func publish(state: Client.State, current: KnownHost?, hosts: [KnownHost], verifying: Bool) {
         let phase: PhoneStatus.Phase
         var note: String?
         switch state {
+        case .connected where verifying:
+            // Woken from suspension and checking the tunnel survived. Not
+            // green yet: input sent now may go nowhere.
+            phase = .connecting
+            note = "reconnecting"
         case .connected: phase = .connected
         case .connecting: phase = .connecting
         case .disconnected: phase = .idle
@@ -91,6 +96,8 @@ final class WatchRelay {
         let gap = Date().timeIntervalSince(lastPing)
         lastPing = Date()
         if gap > 6 && gap < .infinity {
+            // The same threshold the delegate used when it answered this
+            // message "reconnecting".
             RelayLog.note(String(format: "watch ping after %.0fs gap; checking link", gap))
             client.verifyLink()
         }

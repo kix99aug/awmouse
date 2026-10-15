@@ -143,11 +143,11 @@ final class TunnelLink: NSObject, Link, @unchecked Sendable {
     /// Round trip to the host in milliseconds. Also the liveness check: a
     /// crashed host sends no FIN, and a write into the tunnel succeeds
     /// locally whether or not anyone is listening.
-    func ping() async throws -> Int64 {
+    func ping(timeoutMillis: Int64 = 3_000) async throws -> Int64 {
         let session = self.session
         return try await Task.detached {
             var ms: Int64 = 0
-            try session.ping(3_000, ret0_: &ms)
+            try session.ping(timeoutMillis, ret0_: &ms)
             return ms
         }.value
     }

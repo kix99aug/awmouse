@@ -16,10 +16,9 @@ import WatchKit
 /// the knock from aiming, so the cursor slid away at the moment of every click.
 @MainActor
 final class WatchController: ObservableObject {
-    /// The last thing that happened, for a line of feedback. The cursor is on
-    /// another screen, so without this a click that did nothing and a click
-    /// that worked look exactly alike.
-    @Published private(set) var lastAction: String?
+    /// False after a long sleep until the phone answers again; see
+    /// `PhoneLink.confirmed`.
+    @Published private(set) var confirmed = true
 
     /// Whether the phone app is answering right now — its heartbeat, not
     /// WatchConnectivity's `isReachable`, which on a watch only means the
@@ -86,6 +85,7 @@ final class WatchController: ObservableObject {
         let stored = UserDefaults.standard.double(forKey: Self.speedKey)
         speed = stored == 0 ? 1 : Self.snapped(stored)
         link.$status.assign(to: &$status)
+        link.$confirmed.assign(to: &$confirmed)
     }
 
     func activate() {
@@ -140,7 +140,7 @@ final class WatchController: ObservableObject {
 
     /// Whether anything the finger does will reach a cursor.
     var canReachCursor: Bool {
-        reachable && status?.phase == .connected
+        reachable && confirmed && status?.phase == .connected
     }
 
     /// Finger movement on the watch face, in points. The same raw,
@@ -161,32 +161,22 @@ final class WatchController: ObservableObject {
 
     /// Holds a button down or lets it go, for a selection drag.
     func press(_ button: WatchButton, down: Bool) {
-        guard canReachCursor else { return }
+        // A release always goes, even with the light not green: dropping it
+        // would leave the computer holding the button down.
+        guard canReachCursor || !down else { return }
         link.button(button, down: down)
         // Only the press is worth a tap on the wrist. Buzzing again on
         // release would fire at the end of every drag, when the user is
         // looking at the computer and has already felt the start.
-        if down {
-            lastAction = "Drag"
-            WKInterfaceDevice.current().play(.start)
-        }
+        if down { WKInterfaceDevice.current().play(.start) }
     }
 
+    /// No text on screen for a click — it covered the gesture legend — so
+    /// the haptic is the whole confirmation, and there is none for a click
+    /// that went nowhere.
     func click(_ button: WatchButton) {
-        // No haptic for a click that went nowhere: the buzz is how the wrist
-        // learns that a click happened.
         guard canReachCursor else { return }
         link.click(button)
-        switch button {
-        case .left:
-            lastAction = "Left click"
-            WKInterfaceDevice.current().play(.click)
-        case .right:
-            lastAction = "Right click"
-            WKInterfaceDevice.current().play(.directionUp)
-        case .middle:
-            lastAction = "Middle click"
-            WKInterfaceDevice.current().play(.click)
-        }
+        WKInterfaceDevice.current().play(button == .right ? .directionUp : .click)
     }
 }
