@@ -15,38 +15,45 @@ struct WatchRootView: View {
     /// does nothing.
     @FocusState private var crownFocused: Bool
 
-    @Environment(\.scenePhase) private var scenePhase
-
     @State private var picking = false
 
-    private var needsPhone: Bool {
-        switch controller.credentialPhase {
-        case .ready: return false
-        case .asking, .phoneUnavailable, .phoneHasNone: return true
-        }
-    }
-
     var body: some View {
-        // A navigation stack for one thing: it is what gives a watch app the
-        // toolbar slot in the top corner beside the clock, which is otherwise
-        // dead space, and that is where choosing a computer lives.
-        NavigationStack {
-            pad
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        if !controller.computers.isEmpty {
-                            Button { picking = true } label: {
-                                Image(systemName: "desktopcomputer")
+        Group {
+            if controller.phoneMissing {
+                PhoneMissingView()
+            } else {
+                // A navigation stack for one thing: it is what gives a watch
+                // app the toolbar slot in the top corner beside the clock,
+                // which is otherwise dead space, and that is where choosing a
+                // computer lives.
+                NavigationStack {
+                    pad
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                if let computers = controller.status?.computers, !computers.isEmpty {
+                                    Button { picking = true } label: {
+                                        Image(systemName: "desktopcomputer")
+                                    }
+                                }
                             }
                         }
-                    }
+                        .sheet(isPresented: $picking) {
+                            ComputerPicker(
+                                computers: controller.status?.computers ?? [],
+                                current: controller.status?.current,
+                                choose: controller.choose)
+                        }
                 }
-                .sheet(isPresented: $picking) {
-                    ComputerPicker(
-                        computers: controller.computers,
-                        current: controller.current,
-                        choose: controller.choose)
-                }
+            }
+        }
+        // Advertised whenever the phone app is out of reach, not only once
+        // the full-screen notice is up: the sooner the phone offers awmouse on
+        // its lock screen, the sooner it is one tap away. iOS will not
+        // relaunch an app the user swiped out of the switcher, and this is
+        // the one sanctioned way to put it within reach.
+        .userActivity(controlActivityType, isActive: !controller.reachable) { activity in
+            activity.title = "awmouse"
+            activity.isEligibleForHandoff = true
         }
     }
 
@@ -66,23 +73,9 @@ struct WatchRootView: View {
             .overlay(alignment: .bottom) {
                 hint.padding(.bottom, 4).allowsHitTesting(false)
             }
-            // Advertised only while the watch needs the phone app opened to
-            // get credentials. iOS will not relaunch an app the user swiped
-            // out of the switcher, so this is the one sanctioned way to put it
-            // within reach: the phone shows awmouse on its lock screen, and a
-            // tap opens it.
-            .userActivity(controlActivityType, isActive: needsPhone) { activity in
-                activity.title = "awmouse"
-                activity.isEligibleForHandoff = true
-            }
             .focusable(true)
             .focused($crownFocused)
             .onAppear { crownFocused = true }
-            // Raised again after the user went to open the phone app: ask
-            // once more rather than waiting for reachability to notice.
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .active { controller.retryCredentials() }
-            }
             .digitalCrownRotation(
                 $crown, from: -10_000, through: 10_000, by: 1,
                 sensitivity: .medium, isContinuous: true, isHapticFeedbackEnabled: true
@@ -94,30 +87,31 @@ struct WatchRootView: View {
             }
     }
 
-    /// Drawn over the pad, so it must never take a touch away from it.
-    ///
-    /// Credentials first: without them there is nothing to dial, and what the
-    /// user has to do about it — open the phone app — is the only thing worth
-    /// saying.
+    /// The phone first, then the computer: the watch reaches the computer
+    /// only through the phone app, so a missing phone outranks anything it
+    /// last said.
     @ViewBuilder private var status: some View {
-        switch controller.credentialPhase {
-        case .asking:
-            dot(.yellow, "asking iPhone", busy: true)
-        case .phoneUnavailable:
-            dot(.orange, "open awmouse on iPhone")
-        case .phoneHasNone:
-            dot(.orange, "pair a computer on iPhone")
-        case .ready:
-            // Always the computer's name, whatever the state: with more than
-            // one to choose from, "connecting" alone does not say to what.
-            let name = controller.current.map(Self.label) ?? "computer"
-            if controller.connected {
-                dot(.green, name)
-            } else if let note = controller.linkNote, note != "connecting" {
-                dot(.orange, name, detail: note)
-            } else {
-                dot(.yellow, name, detail: "connecting", busy: true)
+        if !controller.reachable {
+            // Out of reach, but not for long enough to give up: the watch is
+            // waking it.
+            dot(.yellow, "iPhone", detail: "waking", busy: true)
+        } else if let status = controller.status {
+            let name = status.current.map(Self.label)
+            switch status.phase {
+            case .connected:
+                dot(.green, name ?? "connected")
+            case .connecting:
+                dot(.yellow, name ?? "computer", detail: "connecting", busy: true)
+            case .idle:
+                if status.computers.isEmpty {
+                    dot(.orange, "pair a computer on iPhone")
+                } else {
+                    dot(.orange, name ?? "no computer", detail: status.note)
+                }
             }
+        } else {
+            // The phone app is there and has not said anything yet.
+            dot(.yellow, "iPhone", detail: "waiting", busy: true)
         }
     }
 
@@ -145,8 +139,8 @@ struct WatchRootView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            // The name gives way to the state, not the other way round:
-            // "no answer" is what the user needs to read.
+            // The name gives way to the state, not the other way round: the
+            // state is what the user needs to read.
             if let detail {
                 Text(detail)
                     .font(.system(size: 11))
@@ -163,6 +157,35 @@ struct WatchRootView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// The whole screen, because there is nothing else the watch can do: every
+/// gesture goes through the phone app, and it is not running.
+///
+/// It got here because the watch asked the phone to start the app and
+/// nothing came back — which is what happens after the app has been swiped
+/// out of the app switcher. iOS reads that as "stop running this" and will not
+/// launch it again for anything until it is opened by hand. The watch is
+/// advertising Handoff meanwhile, so the phone shows awmouse on its lock
+/// screen and in the app switcher: one tap rather than a search.
+private struct PhoneMissingView: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "iphone")
+                .font(.system(size: 34))
+                .foregroundStyle(Color.orange)
+                .symbolEffect(.pulse, options: .repeating)
+            Text("Open awmouse\non your iPhone")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text("Your watch reaches the computer through it. It's on your iPhone's lock screen.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -185,7 +208,7 @@ private struct ComputerPicker: View {
                         Text(WatchRootView.label(computer))
                             .lineLimit(1)
                         Spacer()
-                        if computer == current {
+                        if computer.id == current?.id {
                             Image(systemName: "checkmark")
                                 .foregroundStyle(Color.accentColor)
                         }

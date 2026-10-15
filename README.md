@@ -21,7 +21,7 @@ Confirmed working on device.
 | tailcat transport | host side working, tested over a loopback relay; phone framework written, not yet bound or run on a device |
 | Windows injection (`SendInput`, absolute) | working, driven from the phone; elevated windows need the host elevated too, which it offers at startup |
 | Linux injection (`uinput`) | not started |
-| watchOS app | dials the host itself over tailcat; arm64 watches only (Series 9 / Ultra 2 and later) |
+| watchOS app | working, relayed through the phone app; watchOS 11 or later |
 
 ## Gestures
 
@@ -47,18 +47,17 @@ The whole watch face is a trackpad, with the same gestures as the phone.
 Every click taps back, since the cursor is on a screen you are probably not
 looking at.
 
-The watch connects to the computer by itself — the phone does not need to be
-open, nearby, or even on. It needs the phone only once: the watch cannot scan a
-QR code, so on first launch it asks the phone app for the computer's address.
-If the phone app isn't running and can't be woken (it was **swiped out of the
-app switcher**), the watch says *open awmouse on iPhone*, and your phone offers
-awmouse on its lock screen so it is one tap away.
+The watch reaches the computer through the awmouse app on your iPhone. The
+app does not need to be open — the watch wakes it — but it must not have been
+**swiped out of the app switcher**: iOS treats that as "stop running this" and
+will not relaunch it for anything until you open it yourself. When that is the
+case the watch fills its screen with *Open awmouse on your iPhone*, and your
+phone offers awmouse on its lock screen so it is one tap away.
 
-The watch knows every computer the phone has paired with. It uses the one
-the phone used last unless you pick another with the computer button in the
-top-left corner, and remembers what you picked.
+The computer button in the top-left corner lists every computer the phone has
+paired with; picking one switches the phone to it.
 
-It needs an Apple Watch Series 9, Ultra 2, or later.
+It needs watchOS 11 or later.
 
 A mode that aimed by moving your wrist was tried and removed: tapping the
 watch to click shook the wrist, and the gyro read that as aiming, so the
@@ -116,7 +115,7 @@ host/                       Go host app (Fyne)
   internal/transport/       Transport interface; the tailcat impl
   mobile/awmtunnel/         the phone's end of the tailcat pipe, bound with gomobile
 shared/MotionInput/         Swift package — gyro filtering and tap detection, shared by phone and watch
-shared/WatchBridge/         Swift package — the watch's host messages, and the credential handover over WCSession
+shared/WatchBridge/         Swift package — what the watch and phone say to each other, and the WCSession plumbing
 ios/
   project.yml               XcodeGen source of truth — edit this, not the .xcodeproj
   icon.svg                  app icon source — `make icon` rasterises it into the asset catalog

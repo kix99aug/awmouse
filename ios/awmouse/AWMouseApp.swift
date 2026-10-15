@@ -4,7 +4,7 @@ import WatchBridge
 
 /// Exists for one line: `didFinishLaunchingWithOptions` is the only hook that
 /// runs on a background launch, which is how the phone app starts when the
-/// watch asks it for credentials. SwiftUI's scene has not appeared at that point
+/// watch asks for it. SwiftUI's scene has not appeared at that point
 /// and may never appear at all.
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
@@ -28,12 +28,12 @@ struct AWMouseApp: App {
                 .environmentObject(client)
                 .environmentObject(air)
                 .onOpenURL(perform: handlePairingLink)
-                // Opened from the watch's Handoff offer, because the watch has
-                // no credentials and needs the app running to get them. Being
-                // open is the whole answer: the watch link has already
-                // published them on launch. The phone does not connect to the
-                // computer for the watch — the watch dials it itself.
-                .onContinueUserActivity(controlActivityType) { _ in }
+                // Opened from the watch's Handoff offer. Arriving here means
+                // somebody is holding a watch waiting to drive the cursor, so
+                // connect without making them ask twice.
+                .onContinueUserActivity(controlActivityType) { _ in
+                    client.connectForRemoteUse()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     // Coming back to the app is when to notice the tunnel died
                     // while it was suspended.

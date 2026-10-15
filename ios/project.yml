@@ -4,8 +4,7 @@ options:
   deploymentTarget:
     iOS: "17.0"
     # 11.0 for SpatialEventGesture, which is the only way to count fingers on
-    # a watch. Nothing is lost: the Go tunnel is arm64 only, so this app
-    # already installs solely on watches that shipped with 10 and take 11.
+    # a watch: the trackpad's right and middle clicks depend on it.
     watchOS: "11.0"
   createIntermediateGroups: true
 
@@ -36,8 +35,8 @@ targets:
       - framework: Frameworks/Awmtunnel.xcframework
         embed: false
       # The watch app ships inside the phone app, in the folder the installer
-      # looks in. It reaches the host over its own tunnel; it depends on the
-      # phone only for the credentials, since it cannot scan a pairing code.
+      # looks in. It is not independent: it reaches the host by talking to the
+      # phone, which is the only side that can run the tunnel.
       - target: awmouse-watch
         embed: true
         copy:
@@ -128,14 +127,9 @@ targets:
       # No MotionInput: the watch reads no sensor. Its face is a trackpad and
       # its crown is a scroll wheel, and both are plain touch input.
       - package: WatchBridge
-      - framework: Frameworks/Awmtunnel.xcframework
-        embed: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: space.keybo.awmouse.watchkitapp
-        # arm64 only. Go has no arm64_32 backend, so the tunnel exists for the
-        # 64-bit watches alone — Series 9, Ultra 2 and later.
-        ARCHS: arm64
         MARKETING_VERSION: "0.3"
         CURRENT_PROJECT_VERSION: "${BUILD_NUMBER}"
         # A watch app has no icon catalog of its own yet; without this Xcode

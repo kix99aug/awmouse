@@ -168,6 +168,14 @@ final class Client: ObservableObject {
         }
     }
 
+    /// Someone has picked up the watch. That is a fresh intention to drive
+    /// the cursor, so it overrides a deliberate Disconnect — unlike a view
+    /// merely appearing, which is what `reconnectIfNeeded` guards against.
+    func connectForRemoteUse() {
+        stayDisconnected = false
+        reconnectIfNeeded()
+    }
+
     /// Reconnects to the last computer if the link is not up. iOS suspends a
     /// backgrounded app and the tunnel dies with it, so returning to the app
     /// routinely finds a connection that ended while nobody was looking.

@@ -1,15 +1,17 @@
 import Foundation
 
-/// What the watch asks the computer to do.
+/// What the watch asks the phone to do. The phone forwards it to the
+/// computer: the watch cannot reach the computer itself, because watchOS
+/// keeps raw sockets from third-party apps, and the tunnel is made of them.
+/// See DESIGN.md, "Why the watch goes through the phone".
 ///
-/// The watch speaks to the host directly, over its own tunnel, so these are
-/// written in the host's protocol rather than in anything of the phone's. They
-/// live here rather than in the watch target so that the encoding can be
-/// tested on a machine that is not a watch.
+/// Shared between the two apps rather than declared on each side. The one
+/// thing that has actually broken in this protocol before was a field name
+/// drifting between two copies, and a copy on each side is how that happens.
 public enum WatchEvent: Equatable, Sendable {
     /// Raw, unaccelerated pointer delta in points, with the interval that
     /// produced it in milliseconds — the same shape the phone's own surfaces
-    /// produce. The host owns the acceleration curve.
+    /// produce, so the phone has nothing to convert.
     case move(dx: Double, dy: Double, dt: Double)
     case scroll(dx: Double, dy: Double)
     case click(WatchButton)
@@ -27,56 +29,67 @@ public enum WatchButton: String, Equatable, Sendable {
 
 // MARK: - Wire form
 
+/// WatchConnectivity carries property lists, not Codable, so the event is
+/// written as a small dictionary. The keys match the host's JSON protocol
+/// deliberately: someone reading one will recognise the other.
 extension WatchEvent {
-    /// The JSON lines the host reads — host/internal/proto. Built by hand
-    /// rather than through JSONEncoder because the phone's message type lives
-    /// in the phone target, and four fixed shapes do not justify a second copy
-    /// of it.
-    ///
-    /// A click is two messages, not one. The host counts clicks itself — that
-    /// is how it tells a double click from two single ones — so it wants the
-    /// press and the release.
-    public var messages: [String] {
+    public var payload: [String: Any] {
         switch self {
         case .move(let dx, let dy, let dt):
-            return [#"{"t":"m","dx":\#(dx),"dy":\#(dy),"dt":\#(dt)}"#]
+            return ["t": "m", "dx": dx, "dy": dy, "dt": dt]
         case .scroll(let dx, let dy):
-            return [#"{"t":"s","dx":\#(dx),"dy":\#(dy)}"#]
+            return ["t": "s", "dx": dx, "dy": dy]
         case .click(let button):
-            return Self.button(button, down: true) + Self.button(button, down: false)
+            return ["t": "c", "b": button.rawValue]
         case .button(let button, let down):
-            return Self.button(button, down: down)
+            return ["t": "b", "b": button.rawValue, "d": down]
         }
     }
 
-    /// The host reads a missing "d" as false, so a release carries no flag at
-    /// all — the same shape the phone's encoder produces.
-    private static func button(_ button: WatchButton, down: Bool) -> [String] {
-        down
-            ? [#"{"t":"c","b":"\#(button.rawValue)","d":true}"#]
-            : [#"{"t":"c","b":"\#(button.rawValue)"}"#]
-    }
+    /// Returns nil for anything unrecognised. A newer watch talking to an
+    /// older phone should lose the message it does not understand, not the
+    /// connection.
+    public init?(payload: [String: Any]) {
+        switch payload["t"] as? String {
+        case "m":
+            guard let dx = payload["dx"] as? Double,
+                  let dy = payload["dy"] as? Double,
+                  let dt = payload["dt"] as? Double
+            else { return nil }
+            self = .move(dx: dx, dy: dy, dt: dt)
 
-    /// Two moves in a row can be sent as one: motion is a quantity, and ten
-    /// small moves and their sum land the cursor in the same place. Anything
-    /// else is a discrete intention and is never merged.
-    public func merged(with next: WatchEvent) -> WatchEvent? {
-        switch (self, next) {
-        case let (.move(ax, ay, at), .move(bx, by, bt)):
-            return .move(dx: ax + bx, dy: ay + by, dt: at + bt)
-        case let (.scroll(ax, ay), .scroll(bx, by)):
-            return .scroll(dx: ax + bx, dy: ay + by)
+        case "s":
+            guard let dx = payload["dx"] as? Double,
+                  let dy = payload["dy"] as? Double
+            else { return nil }
+            self = .scroll(dx: dx, dy: dy)
+
+        case "c":
+            guard let raw = payload["b"] as? String,
+                  let button = WatchButton(rawValue: raw)
+            else { return nil }
+            self = .click(button)
+
+        case "b":
+            guard let raw = payload["b"] as? String,
+                  let button = WatchButton(rawValue: raw),
+                  let down = payload["d"] as? Bool
+            else { return nil }
+            self = .button(button, down: down)
+
         default:
             return nil
         }
     }
 }
 
-/// The Handoff activity the watch advertises while it has no address for the
-/// computer and needs the phone app opened to get one.
+/// The Handoff activity the watch advertises while it cannot reach the phone
+/// app.
 ///
-/// iOS will not relaunch an app the user swiped away in the app switcher, and
-/// nothing in an app can change that. What Handoff can do is put the app one
+/// iOS will not relaunch an app the user swiped away in the app switcher —
+/// that gesture is read as "stop running this", and no background mechanism,
+/// WatchConnectivity included, overrides it until the app is opened by hand.
+/// Nothing in an app can change that. What Handoff can do is put the app one
 /// tap away, on the lock screen and in the switcher, instead of leaving the
 /// user to go and find it.
 ///
