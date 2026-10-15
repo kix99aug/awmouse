@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import WatchBridge
 
 /// The objects that outlive any view, in one place so that both SwiftUI and
 /// the app delegate can reach the same instances.
@@ -22,6 +23,7 @@ final class AppCore {
     /// Called from the app delegate, on every launch including the silent
     /// ones.
     func start() {
+        BridgeLog.setSink { RelayLog.note("wc: \($0)") }
         RelayLog.note("launch, \(UIApplication.shared.applicationState == .background ? "in background" : "in foreground")")
         for (name, label) in [
             (UIApplication.didEnterBackgroundNotification, "entered background"),
@@ -30,6 +32,11 @@ final class AppCore {
         ] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
                 RelayLog.note(label)
+                // The relay once went silent with the app in the foreground
+                // and working; this is what the session thought at the time.
+                MainActor.assumeIsolated {
+                    RelayLog.note("wc state: \(AppCore.shared.watch.sessionState)")
+                }
             }
         }
         watch.activate()

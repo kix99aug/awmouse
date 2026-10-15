@@ -38,6 +38,9 @@ final class WatchRelay {
         receiver.onPing = { [weak self] in self?.pinged() }
     }
 
+    /// What WatchConnectivity believes right now, for the log.
+    var sessionState: String { receiver.sessionState }
+
     func activate() {
         // Called on every launch; a second subscription would publish every
         // change twice.

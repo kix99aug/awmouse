@@ -63,6 +63,7 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
         if let error { print("watch session: \(error)") }
         let reachable = session.isReachable
         let activated = state == .activated
+        BridgeLog.note("activation done: state \(state.rawValue), error \(error.map(Self.describe) ?? "none"), \(Self.describe(session))")
         Task { @MainActor in
             self.onReachability?(reachable)
             if activated { self.onActivated?() }
@@ -71,6 +72,7 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         let reachable = session.isReachable
+        BridgeLog.note("reachability changed: \(Self.describe(session))")
         Task { @MainActor in self.onReachability?(reachable) }
     }
 
@@ -113,6 +115,7 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
     /// is not reachable precisely when it is not running.
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         guard userInfo[wakeKey] != nil else { return }
+        BridgeLog.note("wake transfer received")
         Task { @MainActor in self.onWake?() }
     }
 
@@ -123,9 +126,34 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
 
     #if os(iOS)
     // Required on iOS, where one watch can be swapped for another.
-    func sessionDidBecomeInactive(_ session: WCSession) {}
-    func sessionDidDeactivate(_ session: WCSession) { session.activate() }
+    func sessionDidBecomeInactive(_ session: WCSession) {
+        BridgeLog.note("session became inactive")
+    }
+    func sessionDidDeactivate(_ session: WCSession) {
+        BridgeLog.note("session deactivated; activating again")
+        session.activate()
+    }
     #endif
+
+    /// One line of what a session believes about the other side.
+    static func describe(_ session: WCSession) -> String {
+        var parts = ["activation \(session.activationState.rawValue)", "reachable \(session.isReachable)"]
+        #if os(iOS)
+        parts += ["paired \(session.isPaired)", "watch app installed \(session.isWatchAppInstalled)"]
+        #else
+        parts += ["companion installed \(session.isCompanionAppInstalled)"]
+        #endif
+        return parts.joined(separator: ", ")
+    }
+
+    static func describe(_ error: Error) -> String {
+        let e = error as NSError
+        var text = "\(e.domain) \(e.code)"
+        if let underlying = e.userInfo[NSUnderlyingErrorKey] as? NSError {
+            text += " <- \(underlying.domain) \(underlying.code)"
+        }
+        return text
+    }
 }
 
 // MARK: - Watch side
@@ -141,7 +169,9 @@ public final class PhoneLink: ObservableObject {
     /// Whether the phone app has answered lately. This, not `reachable`, is
     /// what says the phone app is actually there: on the watch, `isReachable`
     /// is true whenever the iPhone is nearby, whether or not the app runs.
-    @Published public private(set) var alive = false
+    @Published public private(set) var alive = false {
+        didSet { if alive != oldValue { BridgeLog.note("phone app \(alive ? "answering" : "silent")") } }
+    }
 
     /// What the phone last said, or nil if it has said nothing yet. A phone
     /// that has never reported and a phone reporting no computer look alike
@@ -159,6 +189,13 @@ public final class PhoneLink: ObservableObject {
     private let delegate = SessionDelegate()
     private var timer: Task<Void, Never>?
     private var inactiveSince: Date?
+
+    /// Failures since the last success, for the log: the first is written at
+    /// once, the rest as a count, so a link failing at speed does not bury
+    /// everything else.
+    private var failures = 0
+    private var lastFailureLog = Date.distantPast
+    private var lastError = ""
 
     /// A sleep this short is a turned wrist, not a suspended phone app.
     private let longSleep: TimeInterval = 10
@@ -229,6 +266,7 @@ public final class PhoneLink: ObservableObject {
     public func setActive(_ active: Bool) {
         guard active != self.active else { return }
         self.active = active
+        BridgeLog.note(active ? "watch app active" : "watch app inactive")
         guard active else {
             inactiveSince = Date()
             return
@@ -301,6 +339,12 @@ public final class PhoneLink: ObservableObject {
             queue.removeAll()
             return
         }
+        // Defensive: the delegate is what receives replies, and nothing else
+        // should replace it — but if anything ever does, this says so.
+        if session.delegate !== delegate {
+            BridgeLog.note("session delegate was replaced; restoring")
+            session.delegate = delegate
+        }
         generation += 1
         let tag = generation
         inFlight = tag
@@ -313,16 +357,34 @@ public final class PhoneLink: ObservableObject {
             let status = PhoneStatus(payload: reply)
             Task { @MainActor in self?.finished(tag, answer: status, ok: true) }
         }
-        let failed: @Sendable (Error) -> Void = { [weak self] _ in
-            Task { @MainActor in self?.finished(tag, answer: nil, ok: false) }
+        let failed: @Sendable (Error) -> Void = { [weak self] error in
+            let text = SessionDelegate.describe(error)
+            Task { @MainActor in
+                self?.noteFailure(text)
+                self?.finished(tag, answer: nil, ok: false)
+            }
         }
         session.sendMessage(message, replyHandler: answered, errorHandler: failed)
+    }
+
+    private func noteFailure(_ text: String) {
+        failures += 1
+        lastError = text
+        let now = Date()
+        if failures == 1 || now.timeIntervalSince(lastFailureLog) > 5 {
+            BridgeLog.note("send failed (\(failures) since last success): \(text); \(SessionDelegate.describe(WCSession.default))")
+            lastFailureLog = now
+        }
     }
 
     private func finished(_ tag: Int, answer: PhoneStatus?, ok: Bool) {
         // A message given up on by the timeout may still answer later; it is
         // good news about the phone, but no longer what is in flight.
         if ok {
+            if failures > 0 {
+                BridgeLog.note("send succeeded after \(failures) failures")
+                failures = 0
+            }
             lastReply = Date()
             alive = true
             confirmed = true
@@ -344,6 +406,7 @@ public final class PhoneLink: ObservableObject {
         guard active else { return }
         let now = Date()
         if let tag = inFlight, now.timeIntervalSince(sentAt) > replyTimeout {
+            noteFailure("no reply in \(Int(replyTimeout))s")
             finished(tag, answer: nil, ok: false)
         }
         let heardFrom = max(lastReply, resumedAt)
@@ -391,6 +454,7 @@ public final class PhoneLink: ObservableObject {
             transfer.cancel()
         }
         session.transferUserInfo([wakeKey: true])
+        BridgeLog.note("wake transfer queued; \(SessionDelegate.describe(session))")
     }
 }
 
@@ -441,6 +505,14 @@ public final class WatchReceiver {
         let session = WCSession.default
         session.delegate = delegate
         session.activate()
+    }
+
+    /// One line of what the session believes, for the app's log.
+    public var sessionState: String {
+        guard WCSession.isSupported() else { return "unsupported" }
+        let session = WCSession.default
+        let ours = session.delegate === delegate ? "ours" : "REPLACED"
+        return SessionDelegate.describe(session) + ", delegate \(ours)"
     }
 
     /// Application context: latest-wins, kept by the system for a watch app
