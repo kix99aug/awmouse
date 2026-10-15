@@ -36,8 +36,8 @@ targets:
       - framework: Frameworks/Awmtunnel.xcframework
         embed: false
       # The watch app ships inside the phone app, in the folder the installer
-      # looks in. It is not independent: it reaches the host by talking to the
-      # phone, which is the only side that can run the Go tunnel.
+      # looks in. It reaches the host over its own tunnel; it depends on the
+      # phone only for the credentials, since it cannot scan a pairing code.
       - target: awmouse-watch
         embed: true
         copy:

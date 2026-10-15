@@ -3,19 +3,29 @@
 import Foundation
 import WatchConnectivity
 
-/// Marks the transfer whose only purpose is to get the phone running.
-let wakeKey = "wake"
+/// What the watch sends to ask for credentials, as a message when the phone
+/// app is running and as a queued transfer when it is not.
+let credentialRequestKey = "awmouse.credentials?"
 
 /// Forwards WCSession's callbacks, which arrive on a background queue, to
 /// closures that hop to the main actor. Kept apart from the types that use it
 /// so that neither of them has to pretend the delegate is main-actor.
 final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
-    var onEvent: (@MainActor (WatchEvent) -> Void)?
-    var onState: (@MainActor (HostState) -> Void)?
     var onCredentials: (@MainActor (HostCredentials) -> Void)?
     var onReachability: (@MainActor (Bool) -> Void)?
     var onActivated: (@MainActor () -> Void)?
-    var onWake: (@MainActor () -> Void)?
+    var onRequest: (@MainActor () -> Void)?
+
+    /// What the phone answers a request with. A request arrives as a message
+    /// with a reply handler, on WatchConnectivity's queue, and the handler is
+    /// neither Sendable nor willing to wait — so the answer is read from here,
+    /// on the spot, rather than fetched from the main actor.
+    var reply: HostCredentials? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+    private let lock = NSLock()
+    private var stored: HostCredentials?
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState,
                  error: Error?) {
@@ -33,27 +43,28 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
         Task { @MainActor in self.onReachability?(reachable) }
     }
 
-    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        guard let event = WatchEvent(payload: message) else { return }
-        Task { @MainActor in self.onEvent?(event) }
+    /// The phone's side of a request made while it was running. An empty
+    /// reply means this phone has no computer to give.
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any],
+                 replyHandler: @escaping ([String: Any]) -> Void) {
+        guard message[credentialRequestKey] != nil else {
+            replyHandler([:])
+            return
+        }
+        replyHandler(reply?.payload ?? [:])
     }
 
-    /// The watch asking the phone to be here. Queued transfers are delivered
-    /// by launching the app if it is not running, which plain messages cannot
-    /// do — they need the app to be reachable already, and it is not reachable
-    /// precisely when it is not running.
+    /// A request queued while the phone app was not running. Its delivery is
+    /// what launched the app, in the background; the answer goes back as
+    /// application context, since there is no one waiting on a reply.
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        guard userInfo[wakeKey] != nil else { return }
-        Task { @MainActor in self.onWake?() }
+        guard userInfo[credentialRequestKey] != nil else { return }
+        Task { @MainActor in self.onRequest?() }
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext context: [String: Any]) {
-        if let credentials = HostCredentials(payload: context) {
-            let handler = onCredentials
-            Task { @MainActor in handler?(credentials) }
-        }
-        guard let state = HostState(payload: context) else { return }
-        Task { @MainActor in self.onState?(state) }
+        guard let credentials = HostCredentials(payload: context) else { return }
+        Task { @MainActor in self.onCredentials?(credentials) }
     }
 
     #if os(iOS)
@@ -65,283 +76,189 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
 
 // MARK: - Watch side
 
-/// The watch's end: sends events to the phone, and knows whether the phone is
-/// listening.
+/// Where the watch gets the address and identity it dials the computer with.
+///
+/// The watch has no camera, so it can never scan a pairing code; the phone
+/// scans once and hands the result over. After that the watch keeps its own
+/// copy and needs the phone for nothing — the phone is asked only while the
+/// watch has nothing, and the cursor never travels through it.
 @MainActor
-public final class WatchSender: ObservableObject {
-    /// Whether the phone is there at all. `sendMessage` only works while it
-    /// is, which is correct for a mouse: a queued cursor movement delivered
-    /// later is worse than none.
-    @Published public private(set) var reachable = false
+public final class CredentialSource: ObservableObject {
+    public enum Phase: Equatable, Sendable {
+        /// Credentials are in hand.
+        case ready
+        /// None stored; the phone has been asked and has not answered yet.
+        case asking
+        /// The phone could not be reached. It has to be opened by hand: iOS
+        /// will not launch an app the user swiped out of the switcher, and no
+        /// request from the watch overrides that.
+        case phoneUnavailable
+        /// The phone answered, and knows no computer.
+        case phoneHasNone
+    }
 
-    /// What the phone last said about the host, or nil if it has not said
-    /// anything yet. The difference matters: a phone that has never reported
-    /// and a phone reporting no computer look identical on the wrist, and
-    /// they are completely different faults.
-    @Published public private(set) var host: HostState?
-
-    /// The last credentials the phone sent, or those it sent in some earlier
-    /// session: application context is kept by the system, so this is
-    /// populated at activation even when the phone is switched off.
     @Published public private(set) var credentials: HostCredentials?
-
-    /// Messages WatchConnectivity refused since this session began.
-    ///
-    /// WatchConnectivity is built for occasional small messages, not for a
-    /// stream at pointer rates, and how much it will actually carry is the
-    /// one thing about this design that cannot be settled without a watch on
-    /// a wrist. Counting is what turns "it felt laggy" into a number.
-    ///
-    /// Sent and counted, never replied to. An earlier version measured a
-    /// round trip once a second by asking for a reply, which mixed a
-    /// reply-handler message into a stream of fire-and-forget ones — an
-    /// unusual thing to ask of WatchConnectivity, and the first message sent
-    /// was always the odd one. Latency is worth knowing but not worth being
-    /// the strangest thing in the code while a crash is unexplained.
-    @Published public private(set) var dropped = 0
+    @Published public private(set) var phase: Phase = .asking
 
     private let delegate = SessionDelegate()
-    private var pump: Task<Void, Never>?
+    private let store = CredentialStore()
+    private var giveUp: Task<Void, Never>?
+    private var lastQueued = Date.distantPast
 
-    /// Pending motion, summed. Deltas are far too frequent to send one
-    /// message each — WatchConnectivity is not a 60 Hz pipe — so they are
-    /// accumulated and flushed at a fixed rate. Summing is lossless for
-    /// position: ten small moves and their total land the cursor in the same
-    /// place.
-    private var moveDX = 0.0, moveDY = 0.0, moveDT = 0.0
-    private var scrollDX = 0.0, scrollDY = 0.0
-
-    /// How often queued motion is flushed. 30 Hz is the most WatchConnectivity
-    /// is likely to carry; `dropped` says whether even that was optimistic.
-    public var interval: Duration = .milliseconds(33)
+    /// How long a request may go unanswered before the watch says so. Long
+    /// enough for a background launch of the phone app; short enough that the
+    /// user is not left looking at "asking" for something that is not coming.
+    private let patience: Duration = .seconds(6)
 
     public init() {}
 
     public func activate() {
-        guard WCSession.isSupported() else { return }
-        delegate.onReachability = { [weak self] in self?.reachable = $0 }
-        delegate.onState = { [weak self] in self?.host = $0 }
-        delegate.onCredentials = { [weak self] in self?.credentials = $0 }
+        credentials = store.load()
+        phase = credentials == nil ? .asking : .ready
 
-        // A context sent while this app was not running waits in the session,
-        // but only once the session is up. Reading it on the line after
-        // activate() is reading it too early: activation is asynchronous, and
-        // what comes back then is empty. That is why this reads it again when
-        // activation completes, and why the first read is kept — on a session
-        // that was already active, no callback is coming.
-        delegate.onActivated = { [weak self] in self?.loadStoredContext() }
+        guard WCSession.isSupported() else {
+            if credentials == nil { phase = .phoneUnavailable }
+            return
+        }
+
+        delegate.onCredentials = { [weak self] in self?.adopt($0) }
+        // The context the phone pushed while this app was not running waits
+        // in the session, but only once the session is up: activation is
+        // asynchronous, and reading it on the line after activate() reads
+        // nothing. So it is read again here.
+        delegate.onActivated = { [weak self] in
+            self?.adoptStoredContext()
+            self?.requestIfNeeded()
+        }
+        delegate.onReachability = { [weak self] reachable in
+            // The phone app has just come up — opened by hand, most likely,
+            // because the watch asked for exactly that.
+            if reachable { self?.requestIfNeeded() }
+        }
 
         let session = WCSession.default
         session.delegate = delegate
         session.activate()
-        loadStoredContext()
+        adoptStoredContext()
+        requestIfNeeded()
+    }
 
-        pump?.cancel()
-        pump = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: self?.interval ?? .milliseconds(33))
-                guard let self else { return }
-                self.flush()
-                // While the app is open and the phone is not there, keep
-                // asking. wakePhone rate-limits itself, and stops mattering
-                // the moment the phone answers.
-                if !self.reachable { self.wakePhone() }
+    /// Asks the phone, if there is nothing stored. Safe to call often.
+    public func requestIfNeeded() {
+        guard credentials == nil else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated else { return }
+        phase = .asking
+
+        if session.isReachable {
+            // The phone app is running and can answer at once. The handlers
+            // are spelled out as @Sendable because WatchConnectivity calls
+            // them on its own queue: a closure written inside a main-actor
+            // type and capturing it is otherwise inferred to be main-actor
+            // too, and the runtime traps on entry when it is not.
+            let replied: @Sendable ([String: Any]) -> Void = { [weak self] reply in
+                let credentials = HostCredentials(payload: reply)
+                Task { @MainActor in
+                    if let credentials {
+                        self?.adopt(credentials)
+                    } else {
+                        self?.giveUp?.cancel()
+                        self?.phase = .phoneHasNone
+                    }
+                }
             }
+            let failed: @Sendable (Error) -> Void = { _ in }
+            session.sendMessage([credentialRequestKey: true], replyHandler: replied, errorHandler: failed)
+        } else if Date().timeIntervalSince(lastQueued) > 5 {
+            // Not running. A queued transfer is delivered by launching the
+            // app in the background, which a message cannot do — unless the
+            // user swiped it away, in which case nothing will, and the watch
+            // has to say so. Older transfers are dropped first: undelivered
+            // ones pile up, and a phone that comes back later would otherwise
+            // be woken once for each.
+            lastQueued = Date()
+            for transfer in session.outstandingUserInfoTransfers
+            where transfer.userInfo[credentialRequestKey] != nil {
+                transfer.cancel()
+            }
+            session.transferUserInfo([credentialRequestKey: true])
+        }
+
+        giveUp?.cancel()
+        giveUp = Task { [weak self] in
+            guard let patience = self?.patience else { return }
+            try? await Task.sleep(for: patience)
+            guard let self, !Task.isCancelled, self.credentials == nil, self.phase == .asking else { return }
+            self.phase = .phoneUnavailable
         }
     }
 
-    /// Takes whatever the phone last sent, from whenever it last sent it.
-    /// Never clears: an empty context means the session has nothing to say
-    /// yet, not that the computer has gone.
-    private func loadStoredContext() {
-        let stored = WCSession.default.receivedApplicationContext
-        if let state = HostState(payload: stored) { host = state }
-        if let credentials = HostCredentials(payload: stored) { self.credentials = credentials }
-    }
-
-    public func deactivate() {
-        pump?.cancel()
-        pump = nil
-        moveDX = 0; moveDY = 0; moveDT = 0
-        scrollDX = 0; scrollDY = 0
-    }
-
-    /// Clears the delivery counter, so a session's numbers describe that
-    /// session.
-    public func resetStats() {
-        dropped = 0
-    }
-
-    /// Queues motion. Clicks do not come through here: see `click`.
-    public func move(dx: Double, dy: Double, dt: Double) {
-        moveDX += dx
-        moveDY += dy
-        moveDT += dt
-    }
-
-    public func scroll(dx: Double, dy: Double) {
-        scrollDX += dx
-        scrollDY += dy
-    }
-
-    /// Sent at once and never merged. A click is a discrete intention; motion
-    /// is a quantity, and only a quantity can be summed.
-    public func click(_ button: WatchButton) {
-        send(.click(button))
-    }
-
-    /// Holds a button down or lets it go. Sent at once like a click, not
-    /// batched: a press that arrives after the movement it was meant to
-    /// start is a drag that selected the wrong thing.
-    public func button(_ button: WatchButton, down: Bool) {
-        send(.button(button, down: down))
-    }
-
-    /// Asks the phone to be running. Does nothing if it already is.
-    ///
-    /// A queued transfer rather than a message: a message needs the phone to
-    /// be reachable, and it is unreachable exactly when it is not running,
-    /// which is the case this exists for. The transfer is delivered by
-    /// launching the app in the background.
-    public func wakePhone() {
-        guard WCSession.isSupported() else { return }
-        let session = WCSession.default
-        guard session.activationState == .activated, !session.isReachable else { return }
-        guard Date().timeIntervalSince(lastWake) > 5 else { return }
-        lastWake = Date()
-        session.transferUserInfo([wakeKey: true])
-    }
-
-    private var lastWake = Date.distantPast
-
-    private func flush() {
-        if moveDX != 0 || moveDY != 0 {
-            send(.move(dx: moveDX, dy: moveDY, dt: moveDT))
-            moveDX = 0; moveDY = 0; moveDT = 0
+    /// Takes credentials from the phone — answering a request, or pushed
+    /// because the phone has paired with a different computer since.
+    private func adopt(_ new: HostCredentials) {
+        giveUp?.cancel()
+        giveUp = nil
+        if new != credentials {
+            credentials = new
+            store.save(new)
         }
-        if scrollDX != 0 || scrollDY != 0 {
-            send(.scroll(dx: scrollDX, dy: scrollDY))
-            scrollDX = 0; scrollDY = 0
-        }
+        phase = .ready
     }
 
-    private func send(_ event: WatchEvent) {
-        let session = WCSession.default
-        guard session.isReachable else { return }
-
-        // A lost delta is made good by the next one — motion is a quantity,
-        // and the next message carries where the cursor should be. Losses are
-        // counted rather than reported: at pointer rates a log line per miss
-        // would itself be the problem.
-        //
-        // The error handler runs on WatchConnectivity's own queue, so it does
-        // nothing but hand the count to the main actor.
-        session.sendMessage(event.payload, replyHandler: nil) { [weak self] _ in
-            Task { @MainActor in self?.dropped += 1 }
+    private func adoptStoredContext() {
+        if let pushed = HostCredentials(payload: WCSession.default.receivedApplicationContext) {
+            adopt(pushed)
         }
     }
 }
 
 // MARK: - Phone side
 
-/// The phone's end: receives the watch's events and tells it what the host is
-/// doing.
+#if os(iOS)
+/// The phone's end: hands the watch the computer it should dial, and answers
+/// when the watch asks.
 @MainActor
-public final class PhoneReceiver: ObservableObject {
-    @Published public private(set) var watchReachable = false
-
-    /// Called for every event the watch sends, on the main actor.
-    public var onEvent: (@MainActor (WatchEvent) -> Void)?
-
-    /// The watch wants to use the cursor and the phone was not running. A
-    /// launch delivered through this is silent: no window, no scene, so
-    /// whatever needs doing has to be done from here.
-    public var onWake: (@MainActor () -> Void)?
-
+public final class CredentialPublisher {
     private let delegate = SessionDelegate()
-
-    /// What the watch should be told, and what it has been told. They are
-    /// separate because the two happen at different times: activation is
-    /// asynchronous, and the first state to publish is ready well before the
-    /// session can carry it.
-    private var wanted = HostState()
-    private var sent: HostState?
-
-    /// Sent in the same context as the state, because WCSession keeps only
-    /// one: writing them separately would mean each overwrote the other.
-    private var credentials: HostCredentials?
+    private var current: HostCredentials?
 
     public init() {}
 
     public func activate() {
         guard WCSession.isSupported() else { return }
-        delegate.onEvent = { [weak self] event in self?.onEvent?(event) }
-        delegate.onWake = { [weak self] in self?.onWake?() }
-        delegate.onReachability = { [weak self] reachable in
-            guard let self else { return }
-            self.watchReachable = reachable
-            // A watch that has just come within reach may have launched since
-            // the last context was sent, or never have seen one.
-            if reachable { self.flush(force: true) }
-        }
-        delegate.onActivated = { [weak self] in self?.flush(force: true) }
+        delegate.onActivated = { [weak self] in self?.push() }
+        // Woken by a request the watch queued. Being launched was most of the
+        // answer; the rest is to push what the watch asked for.
+        delegate.onRequest = { [weak self] in self?.push() }
 
         let session = WCSession.default
         session.delegate = delegate
         session.activate()
     }
 
-    /// Tells the watch what the host is doing. Application context rather
-    /// than a message: it is latest-wins and survives the watch being asleep,
-    /// which is what a status is, and it costs nothing when unchanged.
-    ///
-    /// Kept rather than dropped when the session cannot carry it yet.
-    /// `activate` returns before the session is usable, and the first state
-    /// is ready immediately — so dropping it meant a phone that was already
-    /// connected never told the watch, and nothing ever changed to prompt a
-    /// second attempt.
-    public func publish(_ state: HostState) {
-        wanted = state
-        flush(force: false)
+    /// The computer the watch should use, or nil if this phone knows none.
+    public func publish(_ credentials: HostCredentials?) {
+        delegate.reply = credentials
+        guard credentials != current else { return }
+        current = credentials
+        push()
     }
 
-    /// Hands the watch what it needs to reach the computer by itself. Safe to
-    /// call repeatedly; it only costs a transfer when something changed.
-    public func publish(credentials: HostCredentials) {
-        guard credentials != self.credentials else { return }
-        self.credentials = credentials
-        flush(force: true)
-    }
-
-    private func flush(force: Bool) {
-        guard WCSession.isSupported() else { return }
-        guard force || wanted != sent else { return }
-
+    /// Application context: latest-wins, and kept by the system for a watch
+    /// app that is not running. Never sent empty — a context replaces the
+    /// previous one rather than merging, and the watch would take an empty
+    /// one as nothing to say, not as an instruction to forget.
+    private func push() {
+        guard let current, WCSession.isSupported() else { return }
         let session = WCSession.default
-        guard session.activationState == .activated else { return }
-
-        // One dictionary carries both: WCSession keeps a single context, so
-        // sending them separately would mean each overwrote the other.
-        var context = wanted.payload
-        if let credentials {
-            context.merge(credentials.payload) { _, new in new }
-        } else if let last = HostCredentials(payload: session.applicationContext) {
-            // Nothing to say about the computer this time, but the watch has
-            // been told about one before. Sending a context without it would
-            // take it away: the context replaces, it does not merge, and the
-            // watch has no other source for an address.
-            context.merge(last.payload) { _, new in new }
-        }
-
+        guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
-            try session.updateApplicationContext(context)
-            sent = wanted
+            try session.updateApplicationContext(current.payload)
         } catch {
-            // Worth saying: a context that will not go is exactly the failure
-            // that leaves the watch showing no host with no other sign.
             print("watch context: \(error)")
         }
     }
 }
+#endif
 
 #endif

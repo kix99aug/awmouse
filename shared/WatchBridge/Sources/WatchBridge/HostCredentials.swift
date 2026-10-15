@@ -7,10 +7,11 @@ import Foundation
 /// watch worth protecting — the address alone is enough to connect, which is
 /// why the host treats it as a secret.
 ///
-/// Sent as application context, which is latest-wins and, unlike a message,
-/// is kept by the system and handed to the watch app the next time it starts.
-/// That is what lets the watch dial a computer with the phone switched off.
-public struct HostCredentials: Equatable, Sendable {
+/// The phone pushes them as application context, which is latest-wins and is
+/// kept by the system for the watch's next launch, and answers with them when
+/// the watch asks. The watch keeps its own copy in the Keychain, which is what
+/// lets it dial a computer with the phone switched off.
+public struct HostCredentials: Codable, Equatable, Sendable {
     /// The tailcat address from the QR code.
     public var address: String
     /// This client's own identity, so the host recognises the watch as a
@@ -25,8 +26,8 @@ public struct HostCredentials: Equatable, Sendable {
         self.name = name
     }
 
-    /// Prefixed keys, because this shares the context dictionary with
-    /// HostState and the two are written by different code paths.
+    /// The WatchConnectivity form. Prefixed, so that a context or reply from
+    /// some other version cannot be mistaken for these by accident.
     public var payload: [String: Any] {
         ["c.addr": address, "c.key": key, "c.name": name]
     }

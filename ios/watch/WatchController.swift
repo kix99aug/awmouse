@@ -4,38 +4,44 @@ import WatchBridge
 import WatchKit
 
 /// The watch's whole behaviour: the face is a trackpad, the crown is a scroll
-/// wheel.
+/// wheel, and everything goes to the computer over the watch's own tunnel.
 ///
-/// There was a second mode that aimed the cursor by moving the wrist. It is
-/// gone, and the reason is worth keeping: clicking meant knocking the watch,
-/// knocking the watch shook the arm it was strapped to, and the gyro could not
-/// tell that from aiming — so the cursor slid away at the moment of every
-/// click. Freezing the cursor around each knock helped and did not fix it. The
-/// one advantage aiming had, crossing a display in a single sweep, did not pay
-/// for that.
+/// The phone has one job here, and only until it has done it: handing over
+/// the address and identity, which the watch cannot get any other way because
+/// it cannot scan a pairing code. It is never on the path the cursor takes. It
+/// used to be — events went to the phone app and the phone forwarded them —
+/// and that is gone for two reasons. iOS will not relaunch an app the user
+/// swiped away, so the relay was down exactly when it was wanted; and a phone
+/// woken to relay would dial the computer with the same identity the watch was
+/// already using, and the two connections fought.
 ///
-/// There are two ways out. The direct tunnel reaches the computer from the
-/// watch itself and is preferred, because the phone cannot be relied on: iOS
-/// will not relaunch an app the user swiped away, and that is the usual state
-/// of the phone app when someone reaches for the watch. The phone relay is the
-/// fallback, for a watch too old for the retargeted Go library and for the
-/// first run, before the phone has handed over an address.
+/// There was also once a mode that aimed the cursor by moving the wrist. It is
+/// gone because clicking meant knocking the watch, and the gyro could not tell
+/// the knock from aiming, so the cursor slid away at the moment of every click.
 @MainActor
 final class WatchController: ObservableObject {
-    @Published private(set) var reachable = false
-    @Published private(set) var host: HostState?
-
     /// The last thing that happened, for a line of feedback. The cursor is on
     /// another screen, so without this a click that did nothing and a click
     /// that worked look exactly alike.
     @Published private(set) var lastAction: String?
 
-    /// Messages the link refused this session. WatchConnectivity at pointer
-    /// rates is the part of this design that no amount of reasoning settles.
-    @Published private(set) var dropped = 0
+    /// Whether the tunnel is up, which is the same as whether anything the
+    /// finger does will reach the cursor.
+    @Published private(set) var connected = false
 
-    let sender = WatchSender()
-    let tunnel = DirectTunnel()
+    /// What the tunnel is doing while it is not carrying anything: dialling,
+    /// or why it stopped.
+    @Published private(set) var linkNote: String?
+
+    /// Where getting credentials from the phone stands.
+    @Published private(set) var credentialPhase: CredentialSource.Phase = .asking
+
+    /// What the computer calls itself, for the status line.
+    @Published private(set) var hostName: String?
+
+    let credentials = CredentialSource()
+    private let tunnel = DirectTunnel()
+    private var watching: Set<AnyCancellable> = []
 
     /// How much scroll one detent of the crown is worth.
     ///
@@ -47,26 +53,13 @@ final class WatchController: ObservableObject {
     /// and this is a different instrument.
     private let crownScale = 20.0
 
-    /// Whether the watch is driving the cursor itself rather than through the
-    /// phone. Shown, because the two behave differently when the phone goes
-    /// away and the user deserves to know which one they are on.
-    @Published private(set) var direct = false
-
-    /// What the watch's own tunnel is doing while it is not carrying
-    /// anything: dialling, or why it stopped. Nil when it is up, or when
-    /// there is nothing to dial with yet.
-    @Published private(set) var linkNote: String?
-
     init() {
-        sender.$reachable.assign(to: &$reachable)
-        sender.$host.assign(to: &$host)
-        sender.$dropped.assign(to: &$dropped)
-        tunnel.$state
-            .map { $0 == .connected }
-            .assign(to: &$direct)
-        // Mirrored rather than read through `tunnel`: a nested
+        // Mirrored rather than read through the owned objects: a nested
         // ObservableObject does not republish the view that observes its
         // owner, so a view reading tunnel.state directly would never redraw.
+        tunnel.$state
+            .map { $0 == .connected }
+            .assign(to: &$connected)
         tunnel.$state
             .map { state -> String? in
                 switch state {
@@ -76,57 +69,48 @@ final class WatchController: ObservableObject {
                 }
             }
             .assign(to: &$linkNote)
+        credentials.$phase.assign(to: &$credentialPhase)
+        credentials.$credentials
+            .map { $0?.name }
+            .assign(to: &$hostName)
     }
 
     func activate() {
-        sender.activate()
-        sender.resetStats()
-        // Dial as soon as there is anything to dial with. The credentials
-        // arrive from the phone, but the system keeps the last ones, so this
-        // usually has them before the phone is even reachable.
-        tunnel.connect(using: sender.credentials)
-        sender.$credentials
+        guard watching.isEmpty else { return }
+        // Stored credentials are loaded synchronously, so a watch that has
+        // them dials here, before the phone has been consulted about
+        // anything. Later values are the phone switching computers.
+        credentials.$credentials
             .compactMap { $0 }
-            .sink { [weak self] credentials in self?.tunnel.connect(using: credentials) }
+            .sink { [weak self] in self?.tunnel.connect(using: $0) }
             .store(in: &watching)
+        credentials.activate()
     }
 
-    private var watching: Set<AnyCancellable> = []
-
-    /// Sends by whichever route is up, preferring the watch's own. Falling
-    /// back rather than failing matters on the first run: the phone is right
-    /// there, having just handed over the address, and the tunnel it describes
-    /// has not finished dialling yet.
-    private func emit(_ event: WatchEvent) {
-        if tunnel.send(event) { return }
-        switch event {
-        case .move(let dx, let dy, let dt): sender.move(dx: dx, dy: dy, dt: dt)
-        case .scroll(let dx, let dy): sender.scroll(dx: dx, dy: dy)
-        case .click(let button): sender.click(button)
-        case .button(let button, let down): sender.button(button, down: down)
-        }
+    /// Asks the phone again — for when the user has just opened it.
+    func retryCredentials() {
+        credentials.requestIfNeeded()
     }
 
     /// Finger movement on the watch face, in points. The same raw,
     /// unaccelerated delta the phone's trackpad sends: the host owns the
     /// curve, so a 40 mm screen and a 6" one need no different handling here.
     func trackpadMoved(dx: Double, dy: Double, dt: Double) {
-        guard canReachCursor else { return }
-        emit(.move(dx: dx, dy: dy, dt: dt))
+        tunnel.send(.move(dx: dx, dy: dy, dt: dt))
     }
 
     /// Crown rotation. The crown is a scroll wheel that happens to be attached
     /// to a watch; using it for anything else would be perverse — and while
     /// the finger is moving the cursor it is the only thing free.
     func crownScrolled(by delta: Double) {
-        guard delta != 0, canReachCursor else { return }
-        emit(.scroll(dx: 0, dy: delta * crownScale))
+        guard delta != 0 else { return }
+        tunnel.send(.scroll(dx: 0, dy: delta * crownScale))
     }
 
     /// Holds a button down or lets it go, for a selection drag.
     func press(_ button: WatchButton, down: Bool) {
-        guard canReachCursor else { return }
-        emit(.button(button, down: down))
+        guard connected else { return }
+        tunnel.send(.button(button, down: down))
         // Only the press is worth a tap on the wrist. Buzzing again on
         // release would fire at the end of every drag, when the user is
         // looking at the computer and has already felt the start.
@@ -137,8 +121,10 @@ final class WatchController: ObservableObject {
     }
 
     func click(_ button: WatchButton) {
-        guard canReachCursor else { return }
-        emit(.click(button))
+        // No haptic for a click that went nowhere: the buzz is how the wrist
+        // learns that a click happened.
+        guard connected else { return }
+        tunnel.send(.click(button))
         switch button {
         case .left:
             lastAction = "Left click"
@@ -150,12 +136,5 @@ final class WatchController: ObservableObject {
             lastAction = "Middle click"
             WKInterfaceDevice.current().play(.click)
         }
-    }
-
-    /// Whether there is a cursor at the far end to drive at all. The watch's
-    /// own tunnel is enough on its own; the phone is only needed when there
-    /// isn't one.
-    var canReachCursor: Bool {
-        direct || (reachable && host?.connected == true)
     }
 }

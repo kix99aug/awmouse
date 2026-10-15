@@ -1,45 +1,59 @@
 # awmouse — design
 
 Use an Apple Watch (and iPhone) as a remote mouse for a Mac or Windows PC.
-Move hand → cursor moves. Tap → left click. Double tap → right click.
+Drag on the glass → cursor moves. One finger taps a left click, two a right.
 
 ## Architecture
 
 ```
-┌─ Apple Watch ─────────────┐
-│  gyro air-mouse           │
-│  tap / double-tap detect  │
-└────────────┬──────────────┘
-             │ WatchConnectivity
-             ▼
-┌─ iPhone app ──────────────┐
-│  touch trackpad mode      │   ← also an input source, not just a relay
-│  gyro air-mouse mode      │
-│  input arbiter            │   ← exactly one active source at a time
-│  tailcat client           │
-└────────────┬──────────────┘
+┌─ Apple Watch ─────────────┐        ┌─ iPhone app ──────────────┐
+│  trackpad + crown         │ creds  │  touch trackpad mode      │
+│  tailcat client (own key  │◀╌╌╌╌╌╌╌│  gyro air-mouse mode      │
+│  and tunnel)              │  WC    │  QR scanner, host list    │
+└────────────┬──────────────┘        │  tailcat client           │
+             │                       └────────────┬──────────────┘
              │ tailcat pipe — WireGuard encryption, NAT traversal, DERP fallback
-             ▼
-┌─ Host app (Go, Fyne) ─────┐
-│  tray + pairing window    │
-│  tailcat listener         │
-│  accel curve + cursor pos │   ← owns feel, geometry, state
-│  injector (absolute)      │
-│    macOS  → CGEvent       │
-│    Windows→ SendInput     │
-│    Linux  → uinput ABS    │
-└───────────────────────────┘
+             ▼                                    ▼
+┌─ Host app (Go, Fyne) ─────────────────────────────────────────┐
+│  tray + pairing window      tailcat listener                  │
+│  accel curve + cursor pos   ← owns feel, geometry, state      │
+│  injector (absolute): macOS CGEvent · Windows SendInput       │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-The watch cannot speak tailcat directly, and the blocker is the Go compiler, not
-gomobile's CLI surface: watchOS binaries must target `arm64_32` (64-bit hardware,
-32-bit types), and Go has no `arm64_32` backend — golang/go#60180 is still open.
-`gomobile bind -target` accordingly offers only ios / iossimulator / macos /
-maccatalyst. There is no flag or workaround; the port does not exist.
+The watch and the phone are two clients of the host, side by side. The only
+thing that passes between them is the credentials: the watch has no camera and
+can never scan a pairing code, so the phone hands over the address and identity
+once, over WatchConnectivity, and the watch keeps its own copy in the Keychain.
+The cursor never travels through the phone.
 
-The phone relay is therefore structural, not a convenience — which is what makes
-it worth giving the phone its own input modes. See "Standalone watch mode" for
-what it would take to lift this.
+### tailcat on watchOS
+
+Go has no watchOS port — golang/go#60180, no `arm64_32` backend — and
+`gomobile bind -target` offers only ios / iossimulator / macos / maccatalyst.
+For years that made the phone a mandatory relay.
+
+What changed is the hardware: from Series 9 and Ultra 2 a watch is plain
+**arm64**, the same instruction set as the phone. The iOS objects gomobile
+produces are therefore already correct code for those watches, and what stops
+the linker is only a label — each object's `LC_BUILD_VERSION` says iOS.
+`ios/tools/watchify.py` rewrites that label in place. It is a fixed-size field
+in a fixed-size load command, so nothing moves; `vtool` cannot do it because it
+rebuilds the load commands, and an object file has no slack after them.
+
+One call then has to go. watchOS traps inside libsystem's `sigaction` rather
+than returning an error, and the Go runtime calls it in `initsig`, before any of
+our code runs. watchify renames that import to `awsigactn`, which
+`ios/watch/sigshim.c` defines as a no-op, and the runtime comes up without
+signal handlers. It loses SIGSEGV translation — a nil dereference in Go is a
+crash rather than a panic — and SIGURG preemption, which the tunnel does not
+need because it blocks on I/O throughout.
+
+Consequences: the watch app is built for `arm64` only and so installs only on
+Series 9 / Ultra 2 and later; and `make tunnel` always runs watchify, because
+regenerating the binding without it would silently put the phone back in the
+middle. Nobody supports any of this. It is also the only way the watch works
+when the phone app has been swiped away.
 
 ## Components
 
@@ -94,9 +108,9 @@ surfaced: aiming worked upright, while flat the cursor answered to roll and
 answered backwards. Projecting onto world vertical makes aiming mean one thing
 at every angle.
 
-An earlier draft of this document also put the wire protocol types here. That
-was wrong: the watch talks to the phone over WatchConnectivity and never encodes
-the JSON the host consumes, so sharing `Msg` would buy nothing.
+The watch writes the host's JSON itself now that it has its own tunnel. The
+encoding lives in `WatchBridge` (`WatchEvent.messages`) rather than in the watch
+target, so it is tested on a Mac against what `host/internal/proto` reads.
 
 Deliberately *not* using the watchOS system Double Tap gesture
 (`.handGestureShortcut`): it requires Series 9 / Ultra 2 or newer, and it hands
@@ -104,23 +118,33 @@ you one fixed action rather than single-vs-double discrimination.
 
 ### Watch gesture set
 
-The watch face is a trackpad and the crown is a scroll wheel:
+The watch face is a trackpad and the crown is a scroll wheel — the phone's
+gesture set, deliberately, so a hand does not have to learn two:
 
 | Gesture | Action |
 |---|---|
-| drag on the screen | move the cursor |
-| tap | left click |
-| press and hold | right click |
+| drag with one finger | move the cursor |
+| tap with one finger | left click |
+| tap twice | double click |
+| tap, then hold and drag | drag with the left button down |
+| tap with two fingers | right click |
+| tap twice with two fingers | middle click |
 | turn the Digital Crown | scroll |
 
-No clutch to toggle: the finger on the glass is the clutch, exactly as on the
-phone. The crown is free because the finger is busy, which is the whole reason
-it gets the scrolling.
+The whole screen is the pad; the status and a legend are drawn over it and take
+no touches.
 
-Right click is the hold, not a second tap. A double tap would put its wait on
-every left click — the trade the phone refused — and the phone's answer, a
-second target along one edge, does not fit on a screen this size. Holding
-costs nothing until somebody holds.
+Finger counts come from `SpatialEventGesture` (watchOS 11). `DragGesture`
+reports a single touch, which is why right click was once a timed hold — and
+the hold fired whenever a finger rested before moving. `MagnifyGesture` and
+`RotateGesture`, the other ways to notice a second finger, are unavailable on
+watchOS.
+
+Middle is a second two-finger tap rather than three fingers, because three
+barely fit on a 46 mm screen. That makes the right click wait out the
+double-tap window before it is sent: otherwise every middle click would open a
+context menu first. The phone's strip makes the same trade for the same pair
+of buttons. A left click never waits.
 
 **There was a second mode that aimed by moving the wrist, and it was
 removed.** Clicking meant knocking the watch; knocking the watch shook the arm
@@ -210,9 +234,8 @@ Three details in the main surface are not optional:
   be the *peak* count seen during the touch, not the count at any one instant —
   and that a drag which acquires a second finger was never a drag.
 
-The watch cannot borrow any of this: one wrist provides no finger count, so it
-keeps single-vs-double tap discrimination and pays the ~300 ms delay that the
-phone now avoids. See [Shared Swift package](#shared-swift-package-motioninput).
+The watch borrows all of it since `SpatialEventGesture` began reporting every
+finger; see [Watch gesture set](#watch-gesture-set).
 
 ### Engage / clutch
 
@@ -247,11 +270,8 @@ now, so scrolling before the press has resolved would nudge the page on the way
 to a right click. An earlier version skipped the pause there, correctly, back
 when the strip did nothing but scroll.
 
-**On the watch the clutch is a toggle, not something held.** Holding the
-Digital Crown is not available to apps — rotation is, a press is the system's
-— and holding the screen means using the other hand, which gives up the one
-advantage the watch has over the phone. So: tap the button to start aiming,
-tap it again to stop. The wrist is then free, which is the whole point.
+The watch has no gyro mode any more, and so no clutch; see
+[Watch gesture set](#watch-gesture-set) for why aiming by wrist was removed.
 
 ### Host app
 
@@ -487,18 +507,23 @@ attacker a WireGuard session and a refusal.
   pipeline was first built over was retired once the tunnel worked: keeping it
   would have meant a choice in the window that changed nothing the user could
   feel.
-- **The watch pairs with nothing.** It reaches the host only through the
-  phone, so it inherits whatever the phone is connected to, and the phone
-  tells it which computer that is. There is nothing to scan on a watch and no
-  second credential to keep.
+- **The watch gets its credentials from the phone, once.** It cannot scan, so
+  on first launch it asks: a message if the phone app is running, a queued
+  transfer if it is not (delivering one launches the app in the background).
+  The phone also pushes the most recently used computer as application context
+  whenever that changes. The watch keeps what it gets in the Keychain and from
+  then on needs the phone for nothing. If no answer comes within a few seconds
+  it says *open awmouse on iPhone*.
 - **A phone app the user swiped away cannot be reached, and no code fixes
   that.** iOS reads that gesture as "stop running this" and withholds every
   background launch, WatchConnectivity included, until the app is opened by
-  hand. A watch that is merely talking to a backgrounded or suspended phone is
-  fine — a queued transfer launches it. Only a force quit is final. The watch
-  says which of the two it is, and advertises a Handoff activity while the
-  phone is absent, so the phone offers awmouse on its lock screen: one tap
-  instead of going to find it.
+  hand. This now matters only on a watch that has no credentials yet; while it
+  waits it advertises a Handoff activity, so the phone offers awmouse on its
+  lock screen — one tap instead of going to find it.
+- **The phone does not relay the watch.** It once did, and that was retired
+  for two reasons: the relay was down exactly when the phone app had been
+  swiped away, and a phone woken to relay dialled the host itself with the
+  same identity the watch was already using, so the two connections fought.
 - **The phone keeps a list of computers, not just the last one.** A person
   with a laptop and a desktop pairs with both and picks; the most recent is
   reconnected to without being asked, and the rest are one tap away when that
@@ -507,25 +532,24 @@ attacker a WireGuard session and a refusal.
   its name in the `ok` that answers a hello. Forgetting a computer on the
   phone only forgets the address; revoking the phone's access is the host's
   device list, and the two are independent on purpose.
-- The watch has no camera and never pairs independently — it always inherits
-  the phone's connection.
+- The watch has no camera and never pairs independently — its address and
+  identity always come from the phone.
 
-## Non-goal: standalone watch operation
+## Standalone watch operation
 
-**The paired iPhone is a hard requirement.** A cellular watch with no phone
-present is explicitly out of scope.
+Once it has credentials the watch reaches the host on its own — over Wi-Fi, or
+over cellular with the phone switched off or left at home. tailcat does the NAT
+traversal and falls back to DERP, exactly as it does for the phone. See
+[tailcat on watchOS](#tailcat-on-watchos) for how the Go tunnel runs there.
 
-Recorded so this doesn't get re-litigated: the watch *could* network on its own
-(`URLSession` and `Network.framework` both exist on watchOS), but it cannot run
-tailcat, because of the `arm64_32` gap above. Replacing tailcat means replacing
-what it was doing for free — NAT traversal — which means operating a relay, plus
-CryptoKit end-to-end crypto so that relay stays untrusted. That trades away "no
-account, no infrastructure," which is most of why tailcat was chosen. It is also
-the slower path in practice: LTE plus a relay hop beats watch→phone Bluetooth
-(~20–30 ms) only when the phone isn't on the host's LAN.
+What the phone is still required for is the first handover, since only it can
+scan a pairing code, and any later change of computer.
 
-Consequence: the watch never pairs, never holds keys, and never speaks the wire
-protocol to anything but the phone. Cuts real surface area from v1.
+**Open: the watch and the phone share one identity.** The watch dials with the
+phone's client key, so the host sees one device, and if both are connected at
+once the host sees one WireGuard peer at two endpoints and the connections
+fight. The right fix is a key of the watch's own, introduced to the host by the
+already-admitted phone.
 
 ## Wire protocol
 

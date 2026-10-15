@@ -4,18 +4,19 @@ import WatchBridge
 import Awmtunnel
 #endif
 
-/// The watch's own connection to the computer, skipping the phone.
+/// The watch's connection to the computer — its only one. The phone is not
+/// on the path: it hands over credentials once, and the cursor never travels
+/// through it.
 ///
-/// This exists because the phone could not be relied on. iOS will not relaunch
-/// an app the user swiped out of the switcher, so a watch that could only
-/// speak through the phone was dead whenever the phone app had been dismissed
-/// — which is most of the time, and exactly when someone reaches for the watch.
+/// It could not be otherwise. iOS will not relaunch an app the user swiped out
+/// of the switcher, so a watch that spoke through the phone was dead whenever
+/// the phone app had been dismissed — which is most of the time, and exactly
+/// when someone reaches for the watch.
 ///
 /// The tunnel is the same Go library the phone uses, retargeted to watchOS by
 /// ios/tools/watchify.py. Go has no watchOS port; what makes this work is that
 /// a modern watch is arm64, so the compiled code is already correct and only
-/// its platform label was wrong. Watches older than that are arm64_32 and get
-/// nothing here, so the phone relay stays as the fallback.
+/// its platform label was wrong.
 @MainActor
 final class DirectTunnel: ObservableObject {
     enum State: Equatable {
@@ -27,42 +28,44 @@ final class DirectTunnel: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
-    /// True when this build can dial at all. False on a watch whose
-    /// architecture the Go library does not cover.
-    static var supported: Bool {
-        #if canImport(Awmtunnel)
-        return true
-        #else
-        return false
-        #endif
-    }
-
     #if canImport(Awmtunnel)
     private var session: AwmtunnelSession?
     #endif
     private var dialing = false
 
-    /// Kept so a failed dial can be tried again without the phone having to
-    /// send them a second time — which it would have no reason to do.
+    /// What to dial. Kept so a failed dial can be retried without being told
+    /// again, and compared so that a change — the phone has paired with a
+    /// different computer — replaces the connection rather than being ignored.
     private var credentials: HostCredentials?
     private var retry: Task<Void, Never>?
 
     /// Backoff between attempts. A watch app is only ever in the foreground,
     /// so a tight retry would be a tight retry in someone's face; a slow one
-    /// would leave them waiting after walking back into range. This starts
-    /// quick and gives up on quick.
+    /// would leave them waiting after walking back into range.
     private let retryDelays: [Duration] = [.seconds(2), .seconds(5), .seconds(15)]
     private var attempts = 0
 
-    /// Connects if there is something to connect to and nothing already in
-    /// flight. Safe to call on every event: a stream of movements produces one
-    /// dial, not one per movement.
-    func connect(using credentials: HostCredentials?) {
+    /// Events waiting to go, in order, and whether one is on the wire.
+    ///
+    /// One at a time, as the phone's client does it. Each send used to be its
+    /// own detached task, and detached tasks keep no order — so a release
+    /// could overtake the move before it, and a drag would let go of the
+    /// selection one step short. Serialising also gives back-pressure for
+    /// free: while one message is in flight, moves pile up here and merge into
+    /// one instead of queueing behind each other.
+    private var queue: [WatchEvent] = []
+    private var sending = false
+
+    /// Dials if there is something to dial and nothing in flight. Given new
+    /// credentials, drops the current connection and dials those instead.
+    func connect(using new: HostCredentials?) {
         #if canImport(Awmtunnel)
-        if let credentials, !credentials.address.isEmpty {
-            self.credentials = credentials
+        if let new, !new.address.isEmpty, new != credentials {
+            credentials = new
+            attempts = 0
+            if session != nil { close() }
         }
-        guard let credentials = self.credentials, !credentials.address.isEmpty else {
+        guard let credentials else {
             state = .idle
             return
         }
@@ -76,6 +79,13 @@ final class DirectTunnel: ObservableObject {
             let outcome = await Self.dial(credentials)
             guard let self else { return }
             self.dialing = false
+            // Credentials replaced while this dial was out: its result is for
+            // a computer nobody wants any more.
+            guard credentials == self.credentials else {
+                if case .success(let stale) = outcome { Task.detached { _ = try? stale.close() } }
+                self.connect(using: nil)
+                return
+            }
             switch outcome {
             case .success(let session):
                 self.session = session
@@ -91,49 +101,64 @@ final class DirectTunnel: ObservableObject {
         #endif
     }
 
-    func disconnect() {
+    /// Queues one event. Dropped when there is no tunnel: a cursor movement
+    /// delivered after a reconnect would be a movement nobody made.
+    func send(_ event: WatchEvent) {
         #if canImport(Awmtunnel)
-        retry?.cancel()
-        retry = nil
-        let open = session
-        session = nil
-        state = .idle
-        Task.detached { _ = try? open?.close() }
-        #endif
-    }
-
-    /// Sends one event. Returns false when there is no tunnel, which is the
-    /// caller's cue to fall back to the phone.
-    @discardableResult
-    func send(_ event: WatchEvent) -> Bool {
-        #if canImport(Awmtunnel)
-        guard case .connected = state, let session else { return false }
-        let messages = event.messages
-        Task.detached { [weak self] in
-            do {
-                for json in messages { try session.send(json) }
-            } catch {
-                // The tunnel is gone. Drop it rather than keep failing; the
-                // next event dials again.
-                await MainActor.run { self?.dropped() }
-            }
+        guard case .connected = state else { return }
+        if let last = queue.last, let merged = last.merged(with: event) {
+            queue[queue.count - 1] = merged
+        } else {
+            queue.append(event)
         }
-        return true
-        #else
-        return false
+        pump()
         #endif
     }
 
     #if canImport(Awmtunnel)
-    private func dropped() {
+    private func pump() {
+        guard !sending, !queue.isEmpty, let session else { return }
+        let messages = queue.removeFirst().messages
+        sending = true
+        Task.detached { [weak self] in
+            var failed = false
+            do {
+                for json in messages { try session.send(json) }
+            } catch {
+                failed = true
+            }
+            await self?.sent(failed: failed, on: session)
+        }
+    }
+
+    private func sent(failed: Bool, on finished: AwmtunnelSession) {
+        sending = false
+        // A send that finished on a connection already replaced says nothing
+        // about the current one.
+        guard finished === session else { return pump() }
+        if failed {
+            lost()
+        } else {
+            pump()
+        }
+    }
+
+    private func lost() {
         session = nil
+        queue.removeAll()
         state = .failed("lost")
         scheduleRetry()
     }
 
-    /// Tries again on its own. Nothing else will: the phone sends credentials
-    /// once, and a watch app that has gone quiet is one the user is looking
-    /// at, waiting for it to work.
+    private func close() {
+        let open = session
+        session = nil
+        queue.removeAll()
+        Task.detached { _ = try? open?.close() }
+    }
+
+    /// Tries again on its own. Nothing else will: a watch app that has gone
+    /// quiet is one the user is looking at, waiting for it to work.
     private func scheduleRetry() {
         guard retry == nil, credentials != nil else { return }
         let delay = retryDelays[min(attempts, retryDelays.count - 1)]
@@ -164,7 +189,7 @@ final class DirectTunnel: ObservableObject {
                 // The host admits a device it already knows whatever code it
                 // sends, and the watch never has one — it cannot scan. If the
                 // host has forgotten this key, this is where it says so.
-                let result = try session.hello("", name: WKInterfaceDeviceName, timeoutMillis: 5_000)
+                let result = try session.hello("", name: deviceName, timeoutMillis: 5_000)
                 guard result.admitted else {
                     _ = try? session.close()
                     return .failure(TunnelError.refused(result.reason))
@@ -175,14 +200,19 @@ final class DirectTunnel: ObservableObject {
             }
         }.value
     }
-    #endif
 
     private static func describe(_ error: Error) -> String {
-        if case TunnelError.refused(let reason) = error {
-            return reason.isEmpty ? "refused" : reason
+        guard case TunnelError.refused(let reason) = error else { return "offline" }
+        switch reason {
+        // The host no longer knows this identity — forgotten in its device
+        // list. Only a fresh pairing on the phone fixes that.
+        case AwmtunnelReasonCode: return "not paired — pair on iPhone"
+        case AwmtunnelReasonLocked: return "locked — try shortly"
+        case "": return "refused"
+        default: return reason
         }
-        return "offline"
     }
+    #endif
 
     enum TunnelError: LocalizedError, Equatable {
         case noSession
@@ -192,31 +222,4 @@ final class DirectTunnel: ObservableObject {
 
 /// The watch reports itself by name so the host's device list can tell it from
 /// the phone that paired it.
-private let WKInterfaceDeviceName = "Apple Watch"
-
-private extension WatchEvent {
-    /// The host speaks the same JSON to every client; the watch builds it
-    /// directly rather than going through the phone's encoder, which lives in
-    /// the phone target.
-    ///
-    /// A click is two messages, not one. The host counts clicks itself — that
-    /// is how it tells a double click from two single ones — so it wants the
-    /// press and the release, and a single message would never produce either.
-    var messages: [String] {
-        switch self {
-        case .move(let dx, let dy, let dt):
-            return [#"{"t":"m","dx":\#(dx),"dy":\#(dy),"dt":\#(dt)}"#]
-        case .scroll(let dx, let dy):
-            return [#"{"t":"s","dx":\#(dx),"dy":\#(dy)}"#]
-        case .click(let button):
-            return [#"{"t":"c","b":"\#(button.rawValue)","d":true}"#,
-                    #"{"t":"c","b":"\#(button.rawValue)"}"#]
-        case .button(let button, let down):
-            // The host reads a missing "d" as false, so the release carries
-            // no flag at all — the same shape the phone's encoder produces.
-            return down
-                ? [#"{"t":"c","b":"\#(button.rawValue)","d":true}"#]
-                : [#"{"t":"c","b":"\#(button.rawValue)"}"#]
-        }
-    }
-}
+private let deviceName = "Apple Watch"

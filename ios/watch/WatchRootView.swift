@@ -15,6 +15,15 @@ struct WatchRootView: View {
     /// does nothing.
     @FocusState private var crownFocused: Bool
 
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var needsPhone: Bool {
+        switch controller.credentialPhase {
+        case .ready: return false
+        case .asking, .phoneUnavailable, .phoneHasNone: return true
+        }
+    }
+
     var body: some View {
         // The pad is the whole screen. Everything else is drawn on top of it
         // rather than beside it: this display is small enough that a status
@@ -31,17 +40,23 @@ struct WatchRootView: View {
             .overlay(alignment: .bottom) {
                 hint.padding(.bottom, 4).allowsHitTesting(false)
             }
-            // Advertised only while the phone is not there. iOS will not
-            // relaunch an app the user swiped out of the switcher, so this is
-            // the one sanctioned way to put it within reach: the phone shows awmouse on
-            // its lock screen, and a tap opens it.
-            .userActivity(controlActivityType, isActive: !controller.reachable) { activity in
+            // Advertised only while the watch needs the phone app opened to
+            // get credentials. iOS will not relaunch an app the user swiped
+            // out of the switcher, so this is the one sanctioned way to put it
+            // within reach: the phone shows awmouse on its lock screen, and a
+            // tap opens it.
+            .userActivity(controlActivityType, isActive: needsPhone) { activity in
                 activity.title = "awmouse"
                 activity.isEligibleForHandoff = true
             }
             .focusable(true)
             .focused($crownFocused)
             .onAppear { crownFocused = true }
+            // Raised again after the user went to open the phone app: ask
+            // once more rather than waiting for reachability to notice.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { controller.retryCredentials() }
+            }
             .digitalCrownRotation(
                 $crown, from: -10_000, through: 10_000, by: 1,
                 sensitivity: .medium, isContinuous: true, isHapticFeedbackEnabled: true
@@ -54,29 +69,27 @@ struct WatchRootView: View {
     }
 
     /// Drawn over the pad, so it must never take a touch away from it.
+    /// Drawn over the pad, so it must never take a touch away from it.
+    ///
+    /// Credentials first: without them there is nothing to dial, and what the
+    /// user has to do about it — open the phone app — is the only thing worth
+    /// saying.
     @ViewBuilder private var status: some View {
-        // The watch's own tunnel outranks everything else: when it is up, the
-        // phone's state says nothing about whether the cursor will move.
-        if controller.direct {
-            dot(.green, controller.host?.name.isEmpty == false ? controller.host!.name : "ready")
-        } else if let note = controller.linkNote {
-            // The watch is trying, or has tried and failed. Either way that
-            // outranks what the phone is doing: this is the route that works
-            // without it.
-            dot(note == "connecting" ? .yellow : .orange, note)
-        } else if !controller.reachable {
+        switch controller.credentialPhase {
+        case .asking:
+            dot(.yellow, "asking iPhone")
+        case .phoneUnavailable:
             dot(.orange, "open awmouse on iPhone")
-        } else if let host = controller.host {
-            if host.connected {
-                dot(.green, host.name.isEmpty ? "ready" : host.name)
+        case .phoneHasNone:
+            dot(.orange, "pair a computer on iPhone")
+        case .ready:
+            if controller.connected {
+                dot(.green, controller.hostName.flatMap { $0.isEmpty ? nil : $0 } ?? "ready")
+            } else if let note = controller.linkNote {
+                dot(note == "connecting" ? .yellow : .orange, note)
             } else {
-                dot(.orange, "no computer")
+                dot(.yellow, "connecting")
             }
-        } else {
-            // Reachable, but the phone has never said anything. Different from
-            // a phone connected to nothing, and worth telling apart: this one
-            // is the link, that one is the computer.
-            dot(.yellow, "waiting")
         }
     }
 
@@ -96,14 +109,6 @@ struct WatchRootView: View {
             Text(action)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-        }
-
-        // Only once there is something to say. A link that is keeping up
-        // should not spend the small screen reporting that it is.
-        if controller.dropped > 0 {
-            Text("\(controller.dropped) dropped")
-                .font(.system(size: 10))
-                .foregroundStyle(Color.orange)
         }
     }
 }
