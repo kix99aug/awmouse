@@ -42,16 +42,33 @@ final class DirectTunnel: ObservableObject {
     #endif
     private var dialing = false
 
+    /// Kept so a failed dial can be tried again without the phone having to
+    /// send them a second time — which it would have no reason to do.
+    private var credentials: HostCredentials?
+    private var retry: Task<Void, Never>?
+
+    /// Backoff between attempts. A watch app is only ever in the foreground,
+    /// so a tight retry would be a tight retry in someone's face; a slow one
+    /// would leave them waiting after walking back into range. This starts
+    /// quick and gives up on quick.
+    private let retryDelays: [Duration] = [.seconds(2), .seconds(5), .seconds(15)]
+    private var attempts = 0
+
     /// Connects if there is something to connect to and nothing already in
     /// flight. Safe to call on every event: a stream of movements produces one
     /// dial, not one per movement.
     func connect(using credentials: HostCredentials?) {
         #if canImport(Awmtunnel)
-        guard let credentials, !credentials.address.isEmpty else {
+        if let credentials, !credentials.address.isEmpty {
+            self.credentials = credentials
+        }
+        guard let credentials = self.credentials, !credentials.address.isEmpty else {
             state = .idle
             return
         }
         guard !dialing, session == nil else { return }
+        retry?.cancel()
+        retry = nil
         dialing = true
         state = .connecting
 
@@ -62,9 +79,11 @@ final class DirectTunnel: ObservableObject {
             switch outcome {
             case .success(let session):
                 self.session = session
+                self.attempts = 0
                 self.state = .connected
             case .failure(let error):
                 self.state = .failed(Self.describe(error))
+                self.scheduleRetry()
             }
         }
         #else
@@ -74,6 +93,8 @@ final class DirectTunnel: ObservableObject {
 
     func disconnect() {
         #if canImport(Awmtunnel)
+        retry?.cancel()
+        retry = nil
         let open = session
         session = nil
         state = .idle
@@ -107,6 +128,22 @@ final class DirectTunnel: ObservableObject {
     private func dropped() {
         session = nil
         state = .failed("lost")
+        scheduleRetry()
+    }
+
+    /// Tries again on its own. Nothing else will: the phone sends credentials
+    /// once, and a watch app that has gone quiet is one the user is looking
+    /// at, waiting for it to work.
+    private func scheduleRetry() {
+        guard retry == nil, credentials != nil else { return }
+        let delay = retryDelays[min(attempts, retryDelays.count - 1)]
+        attempts += 1
+        retry = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled else { return }
+            self.retry = nil
+            self.connect(using: nil)
+        }
     }
 
     /// Off the main actor: dialling is a network round trip, and the watch's
@@ -174,6 +211,12 @@ private extension WatchEvent {
         case .click(let button):
             return [#"{"t":"c","b":"\#(button.rawValue)","d":true}"#,
                     #"{"t":"c","b":"\#(button.rawValue)"}"#]
+        case .button(let button, let down):
+            // The host reads a missing "d" as false, so the release carries
+            // no flag at all — the same shape the phone's encoder produces.
+            return down
+                ? [#"{"t":"c","b":"\#(button.rawValue)","d":true}"#]
+                : [#"{"t":"c","b":"\#(button.rawValue)"}"#]
         }
     }
 }

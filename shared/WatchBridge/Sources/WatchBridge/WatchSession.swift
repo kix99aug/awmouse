@@ -123,16 +123,18 @@ public final class WatchSender: ObservableObject {
         delegate.onState = { [weak self] in self?.host = $0 }
         delegate.onCredentials = { [weak self] in self?.credentials = $0 }
 
+        // A context sent while this app was not running waits in the session,
+        // but only once the session is up. Reading it on the line after
+        // activate() is reading it too early: activation is asynchronous, and
+        // what comes back then is empty. That is why this reads it again when
+        // activation completes, and why the first read is kept — on a session
+        // that was already active, no callback is coming.
+        delegate.onActivated = { [weak self] in self?.loadStoredContext() }
+
         let session = WCSession.default
         session.delegate = delegate
         session.activate()
-        // A context sent while this app was not running is waiting here.
-        if let stored = HostState(payload: session.receivedApplicationContext) {
-            host = stored
-        }
-        if let stored = HostCredentials(payload: session.receivedApplicationContext) {
-            credentials = stored
-        }
+        loadStoredContext()
 
         pump?.cancel()
         pump = Task { @MainActor [weak self] in
@@ -146,6 +148,15 @@ public final class WatchSender: ObservableObject {
                 if !self.reachable { self.wakePhone() }
             }
         }
+    }
+
+    /// Takes whatever the phone last sent, from whenever it last sent it.
+    /// Never clears: an empty context means the session has nothing to say
+    /// yet, not that the computer has gone.
+    private func loadStoredContext() {
+        let stored = WCSession.default.receivedApplicationContext
+        if let state = HostState(payload: stored) { host = state }
+        if let credentials = HostCredentials(payload: stored) { self.credentials = credentials }
     }
 
     public func deactivate() {
@@ -177,6 +188,13 @@ public final class WatchSender: ObservableObject {
     /// is a quantity, and only a quantity can be summed.
     public func click(_ button: WatchButton) {
         send(.click(button))
+    }
+
+    /// Holds a button down or lets it go. Sent at once like a click, not
+    /// batched: a press that arrives after the movement it was meant to
+    /// start is a drag that selected the wrong thing.
+    public func button(_ button: WatchButton, down: Bool) {
+        send(.button(button, down: down))
     }
 
     /// Asks the phone to be running. Does nothing if it already is.
@@ -305,7 +323,15 @@ public final class PhoneReceiver: ObservableObject {
         // One dictionary carries both: WCSession keeps a single context, so
         // sending them separately would mean each overwrote the other.
         var context = wanted.payload
-        if let credentials { context.merge(credentials.payload) { _, new in new } }
+        if let credentials {
+            context.merge(credentials.payload) { _, new in new }
+        } else if let last = HostCredentials(payload: session.applicationContext) {
+            // Nothing to say about the computer this time, but the watch has
+            // been told about one before. Sending a context without it would
+            // take it away: the context replaces, it does not merge, and the
+            // watch has no other source for an address.
+            context.merge(last.payload) { _, new in new }
+        }
 
         do {
             try session.updateApplicationContext(context)

@@ -14,6 +14,10 @@ public enum WatchEvent: Equatable, Sendable {
     case move(dx: Double, dy: Double, dt: Double)
     case scroll(dx: Double, dy: Double)
     case click(WatchButton)
+    /// A button held down or let go, for a drag. Separate from `click`
+    /// because the two halves are far apart in time and the cursor moves
+    /// between them.
+    case button(WatchButton, down: Bool)
 }
 
 public enum WatchButton: String, Equatable, Sendable {
@@ -36,6 +40,8 @@ extension WatchEvent {
             return ["t": "s", "dx": dx, "dy": dy]
         case .click(let button):
             return ["t": "c", "b": button.rawValue]
+        case .button(let button, let down):
+            return ["t": "b", "b": button.rawValue, "d": down]
         }
     }
 
@@ -62,6 +68,13 @@ extension WatchEvent {
                   let button = WatchButton(rawValue: raw)
             else { return nil }
             self = .click(button)
+
+        case "b":
+            guard let raw = payload["b"] as? String,
+                  let button = WatchButton(rawValue: raw),
+                  let down = payload["d"] as? Bool
+            else { return nil }
+            self = .button(button, down: down)
 
         default:
             return nil

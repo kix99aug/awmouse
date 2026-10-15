@@ -40,19 +40,34 @@ final class WatchRelay: ObservableObject {
                 self?.publish(state: state, host: host)
             }
             .store(in: &watching)
+
+        // Separate from the state above, and deliberately: application context
+        // is latest-wins and replaces the whole dictionary, so a context sent
+        // without the address erases the one the watch had stored. The phone
+        // must therefore carry the address from the moment it launches, not
+        // from the moment it next connects — otherwise opening the phone app
+        // is what breaks the watch.
+        client.$hosts
+            .sink { [weak self] hosts in self?.publishCredentials(for: hosts.first) }
+            .store(in: &watching)
+    }
+
+    /// Hands the watch what it needs to reach the computer by itself. The most
+    /// recently used computer, because that is the one the watch should try —
+    /// the same default the phone's own connect screen uses.
+    private func publishCredentials(for host: KnownHost?) {
+        guard let host else { return }
+        receiver.publish(credentials: HostCredentials(
+            address: host.address, key: ClientIdentity.key, name: host.name))
     }
 
     private func publish(state: Client.State, host: KnownHost?) {
         let connected = state == .connected
         receiver.publish(HostState(connected: connected, name: connected ? (host?.name ?? "") : ""))
 
-        // Hand over the address as soon as one is known to work. The watch
-        // cannot obtain it any other way — it has no camera, so it can never
-        // scan a pairing code — and once it has it, the system keeps it, so
-        // the watch can still dial after the phone is switched off.
-        guard connected, let host else { return }
-        receiver.publish(credentials: HostCredentials(
-            address: host.address, key: ClientIdentity.key, name: host.name))
+        // A computer that has just answered outranks whatever was most
+        // recently used, which may be a different one.
+        if connected { publishCredentials(for: host) }
     }
 
     private func apply(_ event: WatchEvent) {
@@ -73,6 +88,8 @@ final class WatchRelay: ObservableObject {
             client.scroll(dx: dx, dy: dy)
         case .click(let button):
             client.click(button.asMouseButton)
+        case .button(let button, let down):
+            client.button(button.asMouseButton, down: down)
         }
     }
 }

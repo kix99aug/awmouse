@@ -52,6 +52,11 @@ final class WatchController: ObservableObject {
     /// away and the user deserves to know which one they are on.
     @Published private(set) var direct = false
 
+    /// What the watch's own tunnel is doing while it is not carrying
+    /// anything: dialling, or why it stopped. Nil when it is up, or when
+    /// there is nothing to dial with yet.
+    @Published private(set) var linkNote: String?
+
     init() {
         sender.$reachable.assign(to: &$reachable)
         sender.$host.assign(to: &$host)
@@ -59,6 +64,18 @@ final class WatchController: ObservableObject {
         tunnel.$state
             .map { $0 == .connected }
             .assign(to: &$direct)
+        // Mirrored rather than read through `tunnel`: a nested
+        // ObservableObject does not republish the view that observes its
+        // owner, so a view reading tunnel.state directly would never redraw.
+        tunnel.$state
+            .map { state -> String? in
+                switch state {
+                case .connecting: return "connecting"
+                case .failed(let why): return why
+                case .idle, .connected: return nil
+                }
+            }
+            .assign(to: &$linkNote)
     }
 
     func activate() {
@@ -86,6 +103,7 @@ final class WatchController: ObservableObject {
         case .move(let dx, let dy, let dt): sender.move(dx: dx, dy: dy, dt: dt)
         case .scroll(let dx, let dy): sender.scroll(dx: dx, dy: dy)
         case .click(let button): sender.click(button)
+        case .button(let button, let down): sender.button(button, down: down)
         }
     }
 
@@ -105,7 +123,21 @@ final class WatchController: ObservableObject {
         emit(.scroll(dx: 0, dy: delta * crownScale))
     }
 
+    /// Holds a button down or lets it go, for a selection drag.
+    func press(_ button: WatchButton, down: Bool) {
+        guard canReachCursor else { return }
+        emit(.button(button, down: down))
+        // Only the press is worth a tap on the wrist. Buzzing again on
+        // release would fire at the end of every drag, when the user is
+        // looking at the computer and has already felt the start.
+        if down {
+            lastAction = "Drag"
+            WKInterfaceDevice.current().play(.start)
+        }
+    }
+
     func click(_ button: WatchButton) {
+        guard canReachCursor else { return }
         emit(.click(button))
         switch button {
         case .left:

@@ -3,7 +3,10 @@ options:
   bundleIdPrefix: space.keybo
   deploymentTarget:
     iOS: "17.0"
-    watchOS: "10.0"
+    # 11.0 for SpatialEventGesture, which is the only way to count fingers on
+    # a watch. Nothing is lost: the Go tunnel is arm64 only, so this app
+    # already installs solely on watches that shipped with 10 and take 11.
+    watchOS: "11.0"
   createIntermediateGroups: true
 
 # Signing identity lives here rather than in this file so that a personal team
