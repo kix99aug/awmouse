@@ -77,7 +77,7 @@ struct WatchRootView: View {
     @ViewBuilder private var status: some View {
         switch controller.credentialPhase {
         case .asking:
-            dot(.yellow, "asking iPhone")
+            dot(.yellow, "asking iPhone", busy: true)
         case .phoneUnavailable:
             dot(.orange, "open awmouse on iPhone")
         case .phoneHasNone:
@@ -86,16 +86,28 @@ struct WatchRootView: View {
             if controller.connected {
                 dot(.green, controller.hostName.flatMap { $0.isEmpty ? nil : $0 } ?? "ready")
             } else if let note = controller.linkNote {
-                dot(note == "connecting" ? .yellow : .orange, note)
+                let connecting = note == "connecting"
+                dot(connecting ? .yellow : .orange, note, busy: connecting)
             } else {
-                dot(.yellow, "connecting")
+                dot(.yellow, "connecting", busy: true)
             }
         }
     }
 
-    private func dot(_ colour: Color, _ text: String) -> some View {
+    /// `busy` pulses the light, for the states that are on their way
+    /// somewhere: a steady light reads as settled, and "connecting" that sits
+    /// still looks exactly like "connecting" that has hung.
+    ///
+    /// A symbol effect rather than a hand-rolled repeating animation. The
+    /// system starts and stops it with `isActive`; a `repeatForever`
+    /// animation keyed on view state is notorious for not stopping when the
+    /// state moves on, which here would be a green light still flashing.
+    private func dot(_ colour: Color, _ text: String, busy: Bool = false) -> some View {
         HStack(spacing: 3) {
-            Circle().fill(colour).frame(width: 5, height: 5)
+            Image(systemName: "circle.fill")
+                .font(.system(size: 6))
+                .foregroundStyle(colour)
+                .symbolEffect(.pulse, options: .repeating, isActive: busy)
             Text(text)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
