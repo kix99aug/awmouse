@@ -74,31 +74,45 @@ struct WatchEventTests {
 
 @Suite("Host credentials")
 struct HostCredentialsTests {
+    private let sample = HostCredentials(key: "privkey:deadbeef", computers: [
+        KnownComputer(address: "tc:imac", name: "iMac"),
+        KnownComputer(address: "tc:pc", name: ""),
+    ])
+
     @Test func credentialsSurviveTheRoundTrip() {
-        let sent = HostCredentials(address: "tc:abc123", key: "privkey:deadbeef", name: "iMac")
-        #expect(HostCredentials(payload: sent.payload) == sent)
+        #expect(HostCredentials(payload: sample.payload) == sample)
+    }
+
+    /// Order is meaning: the first is the phone's most recent, and the
+    /// watch's default.
+    @Test func orderIsKept() {
+        #expect(HostCredentials(payload: sample.payload)?.computers.map(\.address) == ["tc:imac", "tc:pc"])
     }
 
     /// The Keychain copy is JSON; a field renamed without a migration would
     /// strand every watch that had stored the old shape.
     @Test func storedFormSurvivesTheRoundTrip() throws {
-        let sent = HostCredentials(address: "tc:abc123", key: "privkey:deadbeef", name: "iMac")
-        let data = try JSONEncoder().encode(sent)
-        #expect(try JSONDecoder().decode(HostCredentials.self, from: data) == sent)
+        let data = try JSONEncoder().encode(sample)
+        #expect(try JSONDecoder().decode(HostCredentials.self, from: data) == sample)
     }
 
     /// Everything in the payload must be a property-list type, or
     /// WatchConnectivity rejects it at runtime.
     @Test func payloadIsPropertyListSafe() {
-        let c = HostCredentials(address: "tc:abc", key: "k", name: "iMac")
-        #expect(PropertyListSerialization.propertyList(c.payload, isValidFor: .binary))
+        #expect(PropertyListSerialization.propertyList(sample.payload, isValidFor: .binary))
     }
 
-    /// An address is the whole credential; without one there is nothing to
-    /// dial, and an empty reply — the phone knowing no computer — must not
-    /// look like a usable one.
-    @Test func anEmptyAddressIsNotCredentials() {
+    /// The phone answering that it knows no computer must not look usable.
+    @Test func noComputersIsNotCredentials() {
         #expect(HostCredentials(payload: [:]) == nil)
-        #expect(HostCredentials(payload: ["c.addr": "", "c.key": "k"]) == nil)
+        #expect(HostCredentials(payload: ["c.key": "k", "c.list": [[String: Any]]()]) == nil)
+        #expect(HostCredentials(payload: ["c.key": "k", "c.list": [["a": "", "n": "x"]]]) == nil)
+        #expect(HostCredentials(payload: ["c.key": "", "c.list": [["a": "tc:x"]]]) == nil)
+    }
+
+    /// The previous shape, one computer and no list. A watch upgrading with
+    /// that in its session context must ask again rather than misread it.
+    @Test func theOldSingleComputerShapeIsNotMisread() {
+        #expect(HostCredentials(payload: ["c.addr": "tc:x", "c.key": "k", "c.name": "iMac"]) == nil)
     }
 }

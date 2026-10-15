@@ -17,6 +17,8 @@ struct WatchRootView: View {
 
     @Environment(\.scenePhase) private var scenePhase
 
+    @State private var picking = false
+
     private var needsPhone: Bool {
         switch controller.credentialPhase {
         case .ready: return false
@@ -25,6 +27,30 @@ struct WatchRootView: View {
     }
 
     var body: some View {
+        // A navigation stack for one thing: it is what gives a watch app the
+        // toolbar slot in the top corner beside the clock, which is otherwise
+        // dead space, and that is where choosing a computer lives.
+        NavigationStack {
+            pad
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        if !controller.computers.isEmpty {
+                            Button { picking = true } label: {
+                                Image(systemName: "desktopcomputer")
+                            }
+                        }
+                    }
+                }
+                .sheet(isPresented: $picking) {
+                    ComputerPicker(
+                        computers: controller.computers,
+                        current: controller.current,
+                        choose: controller.choose)
+                }
+        }
+    }
+
+    private var pad: some View {
         // The pad is the whole screen. Everything else is drawn on top of it
         // rather than beside it: this display is small enough that a status
         // line costing a row of pixels costs a usable fraction of the surface
@@ -69,7 +95,6 @@ struct WatchRootView: View {
     }
 
     /// Drawn over the pad, so it must never take a touch away from it.
-    /// Drawn over the pad, so it must never take a touch away from it.
     ///
     /// Credentials first: without them there is nothing to dial, and what the
     /// user has to do about it — open the phone app — is the only thing worth
@@ -83,15 +108,21 @@ struct WatchRootView: View {
         case .phoneHasNone:
             dot(.orange, "pair a computer on iPhone")
         case .ready:
+            // Always the computer's name, whatever the state: with more than
+            // one to choose from, "connecting" alone does not say to what.
+            let name = controller.current.map(Self.label) ?? "computer"
             if controller.connected {
-                dot(.green, controller.hostName.flatMap { $0.isEmpty ? nil : $0 } ?? "ready")
-            } else if let note = controller.linkNote {
-                let connecting = note == "connecting"
-                dot(connecting ? .yellow : .orange, note, busy: connecting)
+                dot(.green, name)
+            } else if let note = controller.linkNote, note != "connecting" {
+                dot(.orange, name, detail: note)
             } else {
-                dot(.yellow, "connecting", busy: true)
+                dot(.yellow, name, detail: "connecting", busy: true)
             }
         }
+    }
+
+    static func label(_ computer: KnownComputer) -> String {
+        computer.name.isEmpty ? "computer" : computer.name
     }
 
     /// `busy` pulses the light, for the states that are on their way
@@ -102,7 +133,8 @@ struct WatchRootView: View {
     /// system starts and stops it with `isActive`; a `repeatForever`
     /// animation keyed on view state is notorious for not stopping when the
     /// state moves on, which here would be a green light still flashing.
-    private func dot(_ colour: Color, _ text: String, busy: Bool = false) -> some View {
+    private func dot(_ colour: Color, _ text: String, detail: String? = nil,
+                     busy: Bool = false) -> some View {
         HStack(spacing: 3) {
             Image(systemName: "circle.fill")
                 .font(.system(size: 6))
@@ -113,6 +145,15 @@ struct WatchRootView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+            // The name gives way to the state, not the other way round:
+            // "no answer" is what the user needs to read.
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+            }
         }
     }
 
@@ -121,6 +162,37 @@ struct WatchRootView: View {
             Text(action)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// The phone's computers, one tap each. The current one is ticked.
+private struct ComputerPicker: View {
+    let computers: [KnownComputer]
+    let current: KnownComputer?
+    let choose: (KnownComputer) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List(computers) { computer in
+                Button {
+                    choose(computer)
+                    dismiss()
+                } label: {
+                    HStack {
+                        Text(WatchRootView.label(computer))
+                            .lineLimit(1)
+                        Spacer()
+                        if computer == current {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Computers")
         }
     }
 }

@@ -36,8 +36,17 @@ final class WatchController: ObservableObject {
     /// Where getting credentials from the phone stands.
     @Published private(set) var credentialPhase: CredentialSource.Phase = .asking
 
-    /// What the computer calls itself, for the status line.
-    @Published private(set) var hostName: String?
+    /// The computers the phone has handed over, most recent first.
+    @Published private(set) var computers: [KnownComputer] = []
+
+    /// The one being dialled: the watch's own choice if it has made one and
+    /// that computer is still on the list, otherwise the phone's most recent.
+    @Published private(set) var current: KnownComputer?
+
+    /// The address the user picked on the watch. Kept apart from what the
+    /// phone sends, so that the phone updating its list does not undo it.
+    private var chosen: String?
+    private let selectionStore = CredentialStore(account: "selection")
 
     let credentials = CredentialSource()
     private let tunnel = DirectTunnel()
@@ -70,21 +79,36 @@ final class WatchController: ObservableObject {
             }
             .assign(to: &$linkNote)
         credentials.$phase.assign(to: &$credentialPhase)
-        credentials.$credentials
-            .map { $0?.name }
-            .assign(to: &$hostName)
+        chosen = selectionStore.loadString()
     }
 
     func activate() {
         guard watching.isEmpty else { return }
         // Stored credentials are loaded synchronously, so a watch that has
         // them dials here, before the phone has been consulted about
-        // anything. Later values are the phone switching computers.
+        // anything. Later values are the phone's list changing.
         credentials.$credentials
-            .compactMap { $0 }
-            .sink { [weak self] in self?.tunnel.connect(using: $0) }
+            .sink { [weak self] in self?.dial($0) }
             .store(in: &watching)
         credentials.activate()
+    }
+
+    /// Switches to another computer, and remembers that it was chosen.
+    func choose(_ computer: KnownComputer) {
+        chosen = computer.address
+        selectionStore.save(string: computer.address)
+        dial(credentials.credentials)
+    }
+
+    private func dial(_ credentials: HostCredentials?) {
+        let list = credentials?.computers ?? []
+        computers = list
+        current = list.first { $0.address == chosen } ?? list.first
+        guard let credentials, let current else {
+            tunnel.connect(to: nil)
+            return
+        }
+        tunnel.connect(to: .init(address: current.address, key: credentials.key))
     }
 
     /// Asks the phone again — for when the user has just opened it.

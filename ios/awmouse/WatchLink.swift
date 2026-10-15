@@ -25,20 +25,20 @@ final class WatchLink {
         guard watching.isEmpty else { return }
         publisher.activate()
 
-        // The most recently used computer, because that is the one the watch
-        // should use — the same default the phone's connect screen picks.
-        // Connecting moves a computer to the front, so this also follows the
-        // phone when it switches to another.
+        // Every computer the phone knows, most recent first: the watch
+        // offers them as a choice and defaults to the first, the same one the
+        // phone's connect screen picks. Connecting moves a computer to the
+        // front, so the default follows the phone.
         client.$hosts
-            .map { $0.first }
             .removeDuplicates()
-            .sink { [weak self] host in self?.publish(host) }
+            .sink { [weak self] hosts in self?.publish(hosts) }
             .store(in: &watching)
     }
 
-    private func publish(_ host: KnownHost?) {
-        publisher.publish(host.map {
-            HostCredentials(address: $0.address, key: ClientIdentity.key, name: $0.name)
-        })
+    private func publish(_ hosts: [KnownHost]) {
+        guard !hosts.isEmpty else { return publisher.publish(nil) }
+        publisher.publish(HostCredentials(
+            key: ClientIdentity.key,
+            computers: hosts.map { KnownComputer(address: $0.address, name: $0.name) }))
     }
 }

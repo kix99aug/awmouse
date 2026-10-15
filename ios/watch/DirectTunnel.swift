@@ -28,15 +28,21 @@ final class DirectTunnel: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
+    /// One computer to dial, and the identity to dial it with.
+    struct Target: Equatable, Sendable {
+        var address: String
+        var key: String
+    }
+
     #if canImport(Awmtunnel)
     private var session: AwmtunnelSession?
     #endif
     private var dialing = false
 
     /// What to dial. Kept so a failed dial can be retried without being told
-    /// again, and compared so that a change — the phone has paired with a
-    /// different computer — replaces the connection rather than being ignored.
-    private var credentials: HostCredentials?
+    /// again, and compared so that a change — another computer chosen —
+    /// replaces the connection rather than being ignored.
+    private var target: Target?
     private var retry: Task<Void, Never>?
 
     /// Backoff between attempts. A watch app is only ever in the foreground,
@@ -56,16 +62,18 @@ final class DirectTunnel: ObservableObject {
     private var queue: [WatchEvent] = []
     private var sending = false
 
-    /// Dials if there is something to dial and nothing in flight. Given new
-    /// credentials, drops the current connection and dials those instead.
-    func connect(using new: HostCredentials?) {
+    /// Dials if there is something to dial and nothing in flight. Given a
+    /// different target, drops the current connection and dials that instead.
+    func connect(to new: Target?) {
         #if canImport(Awmtunnel)
-        if let new, !new.address.isEmpty, new != credentials {
-            credentials = new
+        if let new, !new.address.isEmpty, new != target {
+            target = new
             attempts = 0
+            retry?.cancel()
+            retry = nil
             if session != nil { close() }
         }
-        guard let credentials else {
+        guard let target else {
             state = .idle
             return
         }
@@ -76,14 +84,14 @@ final class DirectTunnel: ObservableObject {
         state = .connecting
 
         Task { [weak self] in
-            let outcome = await Self.dial(credentials)
+            let outcome = await Self.dial(target)
             guard let self else { return }
             self.dialing = false
-            // Credentials replaced while this dial was out: its result is for
-            // a computer nobody wants any more.
-            guard credentials == self.credentials else {
+            // Another computer chosen while this dial was out: its result is
+            // for a computer nobody wants any more.
+            guard target == self.target else {
                 if case .success(let stale) = outcome { Task.detached { _ = try? stale.close() } }
-                self.connect(using: nil)
+                self.connect(to: nil)
                 return
             }
             switch outcome {
@@ -160,29 +168,27 @@ final class DirectTunnel: ObservableObject {
     /// Tries again on its own. Nothing else will: a watch app that has gone
     /// quiet is one the user is looking at, waiting for it to work.
     private func scheduleRetry() {
-        guard retry == nil, credentials != nil else { return }
+        guard retry == nil, target != nil else { return }
         let delay = retryDelays[min(attempts, retryDelays.count - 1)]
         attempts += 1
         retry = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
             self.retry = nil
-            self.connect(using: nil)
+            self.connect(to: nil)
         }
     }
 
     /// Off the main actor: dialling is a network round trip, and the watch's
     /// main thread is also drawing the trackpad the user is dragging on.
-    private static func dial(
-        _ credentials: HostCredentials
-    ) async -> Result<AwmtunnelSession, Error> {
+    private static func dial(_ target: Target) async -> Result<AwmtunnelSession, Error> {
         await Task.detached {
             do {
                 // Dial is a top-level Go function, so gomobile exposes it as a
                 // C function and the NSError** stays an out-parameter rather
                 // than becoming `throws`.
                 var error: NSError?
-                let session = AwmtunnelDial(credentials.address, credentials.key, 15_000, nil, &error)
+                let session = AwmtunnelDial(target.address, target.key, 15_000, nil, &error)
                 if let error { return .failure(error) }
                 guard let session else { return .failure(TunnelError.noSession) }
 
@@ -201,8 +207,26 @@ final class DirectTunnel: ObservableObject {
         }.value
     }
 
+    /// A few words for the status line. These used to collapse into
+    /// "offline", which made a computer that is off, a network that is down
+    /// and a tunnel whose replies go somewhere else all look the same.
     private static func describe(_ error: Error) -> String {
-        guard case TunnelError.refused(let reason) = error else { return "offline" }
+        guard case TunnelError.refused(let reason) = error else {
+            let text = (error as NSError).localizedDescription
+            let lower = text.lowercased()
+            // Nothing came back within the dial's 15 s. The computer is off
+            // or asleep, awmouse is not running on it, or its replies are
+            // going to another device holding the same identity.
+            if lower.contains("deadline") || lower.contains("timeout") || lower.contains("timed out") {
+                return "no answer"
+            }
+            if lower.contains("unreachable") || lower.contains("no such host") || lower.contains("dns") {
+                return "no network"
+            }
+            // Anything else is unexpected, and the real text is the only
+            // thing that will explain it.
+            return String(text.prefix(40))
+        }
         switch reason {
         // The host no longer knows this identity — forgotten in its device
         // list. Only a fresh pairing on the phone fixes that.

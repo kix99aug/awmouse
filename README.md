@@ -54,6 +54,10 @@ If the phone app isn't running and can't be woken (it was **swiped out of the
 app switcher**), the watch says *open awmouse on iPhone*, and your phone offers
 awmouse on its lock screen so it is one tap away.
 
+The watch knows every computer the phone has paired with. It uses the one
+the phone used last unless you pick another with the computer button in the
+top-left corner, and remembers what you picked.
+
 It needs an Apple Watch Series 9, Ultra 2, or later.
 
 A mode that aimed by moving your wrist was tried and removed: tapping the
