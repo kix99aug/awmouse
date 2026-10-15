@@ -82,7 +82,8 @@ final class WatchRelay {
         KnownComputer(id: host.address, name: host.name)
     }
 
-    /// The watch checks in every two seconds while its app is open. A longer
+    /// The watch checks in at least every two seconds while its app is open
+    /// — with events while the cursor moves, with heartbeats otherwise. A longer
     /// gap means this app was not running to answer — suspended, most likely,
     /// and woken just now by this very message — and the tunnel may not have
     /// survived that.
