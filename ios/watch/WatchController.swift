@@ -20,6 +20,16 @@ final class WatchController: ObservableObject {
     /// `PhoneLink.confirmed`.
     @Published private(set) var confirmed = true
 
+    /// For a few seconds after the phone is heard from again following an
+    /// outage — when it was connected before it. A phone app that has just
+    /// been restarted reports "not connected" for the half second before it
+    /// starts dialling, and without this the watch flashed its Connect button
+    /// between "Reconnecting" and the trackpad.
+    @Published private(set) var recovering = false
+    private var recoveryEnd: Task<Void, Never>?
+    private var expectReconnect = false
+    private let recoveryWindow: Duration = .seconds(5)
+
     /// Whether the phone app is answering right now — its heartbeat, not
     /// WatchConnectivity's `isReachable`, which on a watch only means the
     /// iPhone is nearby and stays true with the app suspended or gone.
@@ -88,10 +98,15 @@ final class WatchController: ObservableObject {
         speed = stored == 0 ? 1 : Self.snapped(stored)
         link.$status.assign(to: &$status)
         link.$confirmed.assign(to: &$confirmed)
+
     }
 
     func activate() {
         guard watching.isEmpty else { return }
+        link.$confirmed
+            .removeDuplicates()
+            .sink { [weak self] in self?.outage(ended: $0) }
+            .store(in: &watching)
         link.$alive
             .removeDuplicates()
             .sink { [weak self] in self?.reachabilityChanged($0) }
@@ -114,7 +129,28 @@ final class WatchController: ObservableObject {
         }
     }
 
+    /// The phone went quiet, or came back. Coming back, a phone that was
+    /// connected before is given a moment to connect again before "not
+    /// connected" is taken at its word.
+    private func outage(ended: Bool) {
+        if !ended {
+            expectReconnect = status.map { $0.phase != .idle } ?? false
+            return
+        }
+        guard expectReconnect else { return }
+        expectReconnect = false
+        recovering = true
+        recoveryEnd?.cancel()
+        recoveryEnd = Task { [weak self] in
+            guard let window = self?.recoveryWindow else { return }
+            try? await Task.sleep(for: window)
+            guard !Task.isCancelled else { return }
+            self?.recovering = false
+        }
+    }
+
     private func reachabilityChanged(_ now: Bool) {
+        outage(ended: now)
         reachable = now
         missingTimer?.cancel()
         missingTimer = nil

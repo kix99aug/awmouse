@@ -140,6 +140,12 @@ struct WatchRootView: View {
                          colour: .yellow, busy: true,
                          title: again ? "Reconnecting" : "Connecting", detail: name)
         case .idle:
+            if controller.recovering && status.note == nil && !status.computers.isEmpty {
+                // Just back from an outage, and the phone — freshly started,
+                // most likely — has not begun dialling yet. Still reconnecting.
+                return .init(symbol: "arrow.triangle.2.circlepath", colour: .yellow, busy: true,
+                             title: "Reconnecting", detail: name)
+            }
             if status.computers.isEmpty {
                 return .init(symbol: "qrcode", colour: .orange, busy: false,
                              title: "Pair a computer",
