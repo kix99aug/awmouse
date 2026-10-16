@@ -38,7 +38,7 @@ final class WatchRelay: ObservableObject {
         receiver.onPick = { [weak self] in self?.pick($0) }
         // Woken by the watch with no window: someone is holding the watch
         // and wants the cursor.
-        receiver.onWake = { [weak self] in self?.wokenByWatch() }
+        receiver.onWake = { [weak self] in self?.wokenByWatch(fresh: $0) }
         receiver.onPing = { [weak self] in self?.pinged() }
     }
 
@@ -49,6 +49,26 @@ final class WatchRelay: ObservableObject {
         // Called on every launch; a second subscription would publish every
         // change twice.
         guard watching.isEmpty else { return }
+
+        // The first message after the watch has slept is where a stale
+        // background process ends itself instead of answering — decided on
+        // WatchConnectivity's queue, so the delegate is told the app's state
+        // as it changes rather than asking for it there.
+        receiver.setInBackground(UIApplication.shared.applicationState == .background)
+        for (name, background) in [
+            (UIApplication.didEnterBackgroundNotification, true),
+            (UIApplication.willEnterForegroundNotification, false),
+        ] {
+            NotificationCenter.default.publisher(for: name)
+                .sink { [weak self] _ in self?.receiver.setInBackground(background) }
+                .store(in: &watching)
+        }
+        receiver.onStale { gap in
+            RelayLog.note(String(format: "first watch message after %.0fs silence reached a stale background process; ending it so the watch's wake request launches a fresh one", gap))
+            RelayLog.flush()
+            exit(0)
+        }
+
         receiver.activate()
 
         client.$state
@@ -131,16 +151,21 @@ final class WatchRelay: ObservableObject {
     /// the background, where nobody is looking at the app; in front, it asks.
     /// An app ending itself is not something App Review likes, and this is
     /// the one place it happens.
-    private func wokenByWatch() {
+    ///
+    /// `fresh` is the watch waking from a long sleep. A background process
+    /// that sat through it is ended just the same — it is the kind that
+    /// stalls — but in front nothing is wrong, so there is no banner.
+    private func wokenByWatch(fresh: Bool) {
         let age = Date().timeIntervalSince(AppCore.shared.launchedAt)
-        guard age > 10 else {
-            RelayLog.note("woken by watch")
+        let background = UIApplication.shared.applicationState == .background
+        guard age > 10, background || !fresh else {
+            RelayLog.note(fresh ? "woken by watch after its sleep" : "woken by watch")
             client.connectForRemoteUse()
             return
         }
         let quiet = Date().timeIntervalSince(lastPing)
         RelayLog.note(String(format: "wake request %.0fs into this process, %.1fs since last message: watch is not hearing us", age, quiet))
-        if UIApplication.shared.applicationState == .background {
+        if background {
             RelayLog.note("ending this process so the watch can launch a fresh one")
             RelayLog.flush()
             exit(0)

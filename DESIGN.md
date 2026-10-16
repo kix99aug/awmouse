@@ -551,6 +551,12 @@ attacker a WireGuard session and a refusal.
   itself and the watch's next request launches a fresh one; in front it shows
   a banner asking to be reopened. The watch waits before its first request, so
   a phone app that merely has not answered yet is not restarted.
+  Waking from a sleep is handled the same way, without waiting for the stall:
+  the first message after a silence of more than ten seconds that reaches a
+  phone process which sat through it in the background is not answered — the
+  process ends — and the wake request the watch sends on waking launches a
+  fresh one. The watch shows "reconnecting" until that one answers, so the
+  light turns green once, and stays.
   Every message is answered with the phone's status, and the watch sends the
   next only after the answer — at a fixed 30 Hz without waiting, sends began
   failing outright with IDS errors.
