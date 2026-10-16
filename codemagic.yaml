@@ -315,13 +315,29 @@ workflows:
           echo "releasing $version"
       - name: Fetch or create signing files
         script: |
+          # Stop at the first failure. Without this a profile that could not
+          # be created was reported in passing, the script went on, and the
+          # build failed minutes later in the archive, saying only that the
+          # watch target "requires a provisioning profile".
+          set -euo pipefail
+
           # App Store distribution, not development: TestFlight accepts nothing
           # else. Creating the distribution certificate needs the API key to
           # hold the Admin or App Manager role — Developer is not enough.
-          app-store-connect fetch-signing-files "space.keybo.awmouse" --type IOS_APP_STORE --platform IOS --certificate-key=@env:CERTIFICATE_PRIVATE_KEY --create
+          fetch() {
+            app-store-connect fetch-signing-files "$1" --type IOS_APP_STORE --platform IOS \
+              --certificate-key=@env:CERTIFICATE_PRIVATE_KEY --create
+          }
+          fetch "space.keybo.awmouse"
           # The embedded watch app is a second bundle id and needs its own
           # profile; signing the phone app alone leaves the archive unsignable.
-          app-store-connect fetch-signing-files "space.keybo.awmouse.watchkitapp" --type IOS_APP_STORE --platform IOS --certificate-key=@env:CERTIFICATE_PRIVATE_KEY --create
+          #
+          # Tried twice. Creating that profile once came back 409, "multiple
+          # profiles found with the name" — a name stamped to the second,
+          # after a two-minute step: the create had gone through and its retry
+          # collided with it. A second fetch finds the profile it made.
+          fetch "space.keybo.awmouse.watchkitapp" || { sleep 15; fetch "space.keybo.awmouse.watchkitapp"; }
+
           keychain initialize
           keychain add-certificates
       - *install_go
