@@ -14,6 +14,9 @@ let freshKey = "fresh"
 let pickKey = "pick"
 /// Marks the watch's heartbeat, which the phone answers with its status.
 let pingKey = "ping"
+/// When the phone wrote a status it pushed as application context, so that
+/// the watch can tell a push made just now from one delivered late.
+let atKey = "at"
 
 /// Forwards WCSession's callbacks, which arrive on a background queue, to
 /// closures that hop to the main actor. Kept apart from the types that use it
@@ -21,13 +24,20 @@ let pingKey = "ping"
 final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
     var onEvent: (@MainActor (WatchEvent) -> Void)?
     var onPick: (@MainActor (String) -> Void)?
-    var onStatus: (@MainActor (PhoneStatus) -> Void)?
+    /// A status from the phone, and whether it was pushed just now — which
+    /// makes it evidence that the phone app is running, as a reply is.
+    var onStatus: (@MainActor (PhoneStatus, _ current: Bool) -> Void)?
     var onReachability: (@MainActor (Bool) -> Void)?
     var onActivated: (@MainActor () -> Void)?
     var onWake: (@MainActor (_ fresh: Bool) -> Void)?
     var onPing: (@MainActor () -> Void)?
 
-    /// What the phone answers a heartbeat with. The reply handler runs on
+    /// Set by the phone app: what to do instead of handling a message, when
+    /// the first one after a long silence reaches a process that has been
+    /// running in the background. Ends the process; see `staleGap`.
+    var onStale: (@Sendable (TimeInterval) -> Void)?
+
+    /// What the phone answers a heartbeat with. Reply handlers run on
     /// WatchConnectivity's queue and must be called there, so the answer is
     /// kept here, ready, rather than fetched from the main actor.
     var reply: PhoneStatus? {
@@ -40,11 +50,6 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
     private let started = Date()
     private var background = false
 
-    /// Set by the phone app: what to do instead of answering, when the first
-    /// message after a long silence reaches a process that has been running
-    /// in the background. Ends the process; see `staleGap`.
-    var onStale: (@Sendable (TimeInterval) -> Void)?
-
     /// Whether the phone app is in the background, kept here because the
     /// decision is made on WatchConnectivity's queue, where UIApplication
     /// cannot be asked.
@@ -52,50 +57,46 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
         lock.withLock { background = value }
     }
 
-    /// A silence this long before a message means the watch has just woken
-    /// from a sleep. A phone process that has been sitting in the background
-    /// through it is the kind whose live messaging stalls a minute or two
-    /// later — the logs show it every time — so rather than answer and carry
-    /// on until it does, it ends now and the wake request the watch sends on
-    /// waking launches a fresh one. A process a few seconds old is that fresh
-    /// one, and answers.
-    static let staleGap: TimeInterval = 10
-    private static let freshFor: TimeInterval = 10
-
     /// How long the watch can go quiet before its next message means this
     /// app was probably suspended in between. The watch checks in at least
     /// every two seconds while it is awake.
     static let suspensionGap: TimeInterval = 6
 
-    /// The answer for a message arriving now. Usually the snapshot; but after
-    /// a long silence this app has most likely just been woken from
-    /// suspension, and whether the tunnel survived is not known yet — the
-    /// snapshot's "connected" is from before. Saying so on the very first
-    /// answer is what lets the watch show "reconnecting" instead of a green
-    /// light over a link that may be dead.
-    /// The status to answer with — or, as `endAfter`, the silence that means
-    /// this process should end instead of answering.
-    private func answer() -> (status: PhoneStatus?, endAfter: TimeInterval?) {
+    /// A silence this long means the watch has just woken from a sleep. A
+    /// phone process that sat through it in the background is the kind whose
+    /// messaging stalls soon after, so rather than carry on until it does, it
+    /// ends, and the wake request the watch sends on waking launches a fresh
+    /// one. A process a few seconds old is that fresh one, and carries on.
+    static let staleGap: TimeInterval = 10
+    private static let freshFor: TimeInterval = 10
+
+    /// Notes a message's arrival. Returns the silence before it, and whether
+    /// this process should end instead of handling it.
+    private func arrived() -> (gap: TimeInterval, stale: Bool) {
         lock.withLock {
             let now = Date()
             let gap = now.timeIntervalSince(lastMessage)
             lastMessage = now
-            if background, gap > Self.staleGap, gap < .infinity,
-               now.timeIntervalSince(started) > Self.freshFor, onStale != nil {
-                return (nil, gap)
-            }
-            guard var status = stored else { return (nil, nil) }
-            if gap > Self.suspensionGap && gap < .infinity && status.phase == .connected {
-                status.phase = .connecting
-                status.note = "reconnecting"
-            }
-            return (status, nil)
+            let stale = background && gap > Self.staleGap && gap < .infinity
+                && now.timeIntervalSince(started) > Self.freshFor && onStale != nil
+            return (gap, stale)
         }
+    }
+
+    /// The snapshot, except after a silence long enough that this app was
+    /// probably suspended: then whether the tunnel survived is not known yet,
+    /// and the snapshot's "connected" is from before.
+    private func status(after gap: TimeInterval) -> PhoneStatus? {
+        guard var status = reply else { return nil }
+        if gap > Self.suspensionGap && gap < .infinity && status.phase == .connected {
+            status.phase = .connecting
+            status.note = "reconnecting"
+        }
+        return status
     }
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState,
                  error: Error?) {
-        if let error { print("watch session: \(error)") }
         let reachable = session.isReachable
         let activated = state == .activated
         BridgeLog.note("activation done: state \(state.rawValue), error \(error.map(Self.describe) ?? "none"), \(Self.describe(session))")
@@ -111,40 +112,39 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
         Task { @MainActor in self.onReachability?(reachable) }
     }
 
+    /// An event or a pick, sent without asking for a reply. Events do not
+    /// wait on answers: replies from the phone to the watch have been seen to
+    /// stop arriving while messages the other way kept getting through, and
+    /// input that waited on them stopped with them.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        if let address = message[pickKey] as? String {
-            Task { @MainActor in self.onPick?(address) }
-            return
-        }
-        guard let event = WatchEvent(payload: message) else { return }
-        Task { @MainActor in self.onEvent?(event) }
+        let (gap, stale) = arrived()
+        if stale { return end(after: gap) }
+        handle(message)
     }
 
-    /// Every message from the watch expects an answer, and gets the phone's
-    /// current status. Answering is the point: a reply proves the phone app
-    /// is running and handling messages *now*, which nothing else does — on
-    /// the watch, `isReachable` only means the iPhone is nearby. And waiting
-    /// for each answer before sending the next is what keeps WatchConnectivity
-    /// from being asked for more than it can carry.
-    ///
-    /// Answered on the spot, on WatchConnectivity's queue, from the snapshot:
-    /// the handler is not Sendable and must not wait for the main actor.
+    /// A heartbeat, answered on the spot from the snapshot — the handler is
+    /// not Sendable and must not wait for the main actor. A reply proves the
+    /// phone app is running and handling messages now, which nothing else
+    /// does: on the watch, `isReachable` only means the iPhone is nearby.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any],
                  replyHandler: @escaping ([String: Any]) -> Void) {
-        let (status, endAfter) = answer()
-        if let endAfter, let end = onStale {
-            // No answer from this process: the next one comes from its
-            // replacement, which is what the watch is waiting for.
-            end(endAfter)
-            return
-        }
-        replyHandler(status?.payload ?? [:])
-        // Any message is the watch checking in, not only a heartbeat: while
-        // the cursor is moving, the events are the heartbeat.
+        let (gap, stale) = arrived()
+        // No answer from a stale process: the next one comes from its
+        // replacement, which is what the watch is waiting for.
+        if stale { return end(after: gap) }
+        replyHandler(status(after: gap)?.payload ?? [:])
+        handle(message)
+    }
+
+    private func end(after gap: TimeInterval) {
+        onStale?(gap)
+    }
+
+    private func handle(_ message: [String: Any]) {
+        // Any message is the watch checking in, events included.
         Task { @MainActor in self.onPing?() }
-        if message[pingKey] != nil {
-            return
-        } else if let address = message[pickKey] as? String {
+        if message[pingKey] != nil { return }
+        if let address = message[pickKey] as? String {
             Task { @MainActor in self.onPick?(address) }
         } else if let event = WatchEvent(payload: message) {
             Task { @MainActor in self.onEvent?(event) }
@@ -153,8 +153,7 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
 
     /// The watch asking the phone app to be running. Queued transfers are
     /// delivered by launching the app if it is not running, which plain
-    /// messages cannot do — they need the app to be reachable already, and it
-    /// is not reachable precisely when it is not running.
+    /// messages cannot do.
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         guard userInfo[wakeKey] != nil else { return }
         let fresh = userInfo[freshKey] != nil
@@ -164,7 +163,12 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
 
     func session(_ session: WCSession, didReceiveApplicationContext context: [String: Any]) {
         guard let status = PhoneStatus(payload: context) else { return }
-        Task { @MainActor in self.onStatus?(status) }
+        // Pushed within the last few seconds, by the phone's clock — the two
+        // are kept in step by the pairing. An old context delivered late says
+        // nothing about whether the phone app is running now.
+        let at = context[atKey] as? Double ?? 0
+        let current = abs(Date().timeIntervalSince1970 - at) < 5
+        Task { @MainActor in self.onStatus?(status, current) }
     }
 
     #if os(iOS)
@@ -209,103 +213,75 @@ public final class PhoneLink: ObservableObject {
     /// `alive`.
     @Published public private(set) var reachable = false
 
-    /// Whether the phone app has answered lately. This, not `reachable`, is
-    /// what says the phone app is actually there: on the watch, `isReachable`
-    /// is true whenever the iPhone is nearby, whether or not the app runs.
+    /// Whether the phone app has been heard from lately — a heartbeat answered
+    /// or a status pushed just now. This, not `reachable`, says the phone app
+    /// is actually there.
     @Published public private(set) var alive = false {
-        didSet { if alive != oldValue { BridgeLog.note("phone app \(alive ? "answering" : "silent")") } }
+        didSet { if alive != oldValue { BridgeLog.note("phone app \(alive ? "heard from" : "silent")") } }
     }
 
-    /// What the phone last said, or nil if it has said nothing yet. A phone
-    /// that has never reported and a phone reporting no computer look alike
-    /// on the wrist, and are completely different faults.
+    /// What the phone last said, or nil if it has said nothing yet.
     @Published public private(set) var status: PhoneStatus?
 
-    /// False from waking after a long sleep until the phone's first answer.
-    /// Everything known about the phone then is from before the sleep, and
-    /// the phone app has very likely been suspended in the meantime: showing
-    /// that old "connected" as green, while the phone wakes and re-checks its
-    /// link, is how the cursor came to lag five or ten seconds behind a
-    /// green light.
+    /// False from waking after a long sleep until the phone is heard from
+    /// again. What was known then is from before the sleep, and the phone app
+    /// has very likely been suspended meanwhile.
     @Published public private(set) var confirmed = true
 
     private let delegate = SessionDelegate()
     private var timer: Task<Void, Never>?
-    private var inactiveSince: Date?
 
-    /// Failures since the last success, for the log: the first is written at
-    /// once, the rest as a count, so a link failing at speed does not bury
-    /// everything else.
-    private var failures = 0
-    private var lastFailureLog = Date.distantPast
-    private var lastError = ""
+    /// Motion waiting to go, merged; and what is not motion, in order.
+    ///
+    /// Sent without waiting for answers, at most one message every 50 ms.
+    /// Waiting for each answer was the earlier design, and it tied input to
+    /// the one direction of WatchConnectivity that has been seen to fail on
+    /// its own: replies from the phone stopped arriving while the watch's
+    /// messages kept getting through, and the cursor stopped with them. The
+    /// 50 ms gap is what keeps the rate down instead — twenty a second at
+    /// most, with motion in between merging into the next message, so no
+    /// distance is lost.
+    private var queue: [WatchEvent] = []
+    private var pumpScheduled = false
+    private var lastSent = Date.distantPast
+    private let minimumGap: TimeInterval = 0.05
+
+    /// Heartbeats: one outstanding at a time, every couple of seconds.
+    private var pingOut = false
+    private var pingSentAt = Date.distantPast
+    private let pingEvery: TimeInterval = 2
+    private let pingTimeout: TimeInterval = 3
+
+    private var lastHeard = Date.distantPast
+    /// Two missed beats, plus slack for a phone app that has to be woken.
+    private let aliveFor: TimeInterval = 5
+
+    /// Wake requests back off: every unanswered one costs a queued transfer
+    /// on the same link the messages use, and a link already struggling was
+    /// being sent one every three seconds.
+    private var lastWake = Date.distantPast
+    private var wakeDelay: TimeInterval = 3
+    private let firstWakeAfter: TimeInterval = 2.5
+    private let maxWakeDelay: TimeInterval = 30
+
+    /// Whether the watch app is in front and awake. Asleep, the system
+    /// throttles or suspends this app, nothing is sent, and silence from the
+    /// phone means nothing.
+    private var active = true
+    private var startedAt = Date.distantPast
+    private var resumedAt = Date.distantPast
+    private var inactiveSince: Date?
 
     /// A sleep this short is a turned wrist, not a suspended phone app. A
     /// little under the phone's `staleGap`, so that whenever the phone is
-    /// going to start afresh the watch is already showing "reconnecting"
-    /// rather than a green light about to go out.
+    /// going to start afresh the watch is already showing "reconnecting".
     private let longSleep: TimeInterval = 8
-    private var lastWake = Date.distantPast
-    private var lastReply = Date.distantPast
 
-    /// Events waiting to go, in order, and the one on the wire.
-    ///
-    /// One at a time, each waiting for the phone's answer. Sending at a fixed
-    /// 30 Hz without waiting outran the link whenever Bluetooth slowed: the
-    /// messages queued up underneath WatchConnectivity until it started
-    /// failing every send with a generic IDS error, and kept failing after
-    /// the phone app was restarted. Waiting means the link sets the pace —
-    /// fast when it is fast — and motion that arrives meanwhile merges into
-    /// one message rather than queueing behind the others.
-    private var queue: [WatchEvent] = []
-    private var inFlight: Int?
-    private var sentAt = Date.distantPast
-    private var generation = 0
-
-    /// The interval after which an unanswered message is given up on, so
-    /// that one lost reply does not stop everything behind it.
-    private let replyTimeout: TimeInterval = 3
-
-    /// The least time between two messages, whatever the answers allow.
-    ///
-    /// Waiting for each answer bounds the rate by the round trip, and a fast
-    /// round trip is a high rate: turning the crown produces a change every
-    /// few milliseconds, and stalls came most often while scrolling. 50 ms
-    /// caps it at twenty messages a second. Nothing is lost by it — motion
-    /// arriving in the gap merges into the next message — and the delay is
-    /// below what a hand on a trackpad notices.
-    private let minimumGap: TimeInterval = 0.05
-    private var lastSent = Date.distantPast
-    private var pumpScheduled = false
-
-    /// Messages sent, for a rate in the log every few seconds.
+    /// For the log.
     private var sentCount = 0
+    private var failures = 0
     private var lastRateLog = Date()
-
-    /// How long without any answer before a heartbeat is sent, and before the
-    /// phone app counts as gone. Two missed beats, plus slack for a phone app
-    /// that has to be woken to answer.
-    private let pingEvery: TimeInterval = 2
-    private let aliveFor: TimeInterval = 5
-
-    /// Whether the watch app is in front and awake. While it is not —
-    /// the wrist is down, the screen asleep — the system throttles or
-    /// suspends this app, nothing is sent, and silence from the phone means
-    /// nothing. Treating it as an answer once showed "open the phone app" on
-    /// every sleep, for a phone app that was there all along.
-    private var active = true
-    private var resumedAt = Date.distantPast
-    private var startedAt = Date.distantPast
-
-    /// How long unanswered before asking for the phone app to be launched.
-    /// Not at once: the phone treats a wake request reaching a process that
-    /// has been running as a sign its messaging is broken, and restarts. A
-    /// request sent the moment this app opens, before the first heartbeat had
-    /// time to be answered, would restart a phone app that was fine.
-    private let wakeAfter: TimeInterval = 2.5
-    /// And then how often. Each one that reaches a stuck phone app ends it
-    /// and the next launches a fresh one, so this sets the pace of recovery.
-    private let wakeEvery: TimeInterval = 3
+    private var lastFailureLog = Date.distantPast
 
     public init() {}
 
@@ -316,11 +292,12 @@ public final class PhoneLink: ObservableObject {
             self?.reachable = $0
             if $0 { self?.pump() }
         }
-        delegate.onStatus = { [weak self] in self?.status = $0 }
+        delegate.onStatus = { [weak self] status, current in
+            self?.status = status
+            if current { self?.heard(via: "status push") }
+        }
         // The status the phone sent while this app was not running waits in
-        // the session, but only once the session is up: activation is
-        // asynchronous, and reading it on the line after activate() reads
-        // nothing.
+        // the session, but only once the session is up.
         delegate.onActivated = { [weak self] in self?.loadStoredStatus() }
 
         let session = WCSession.default
@@ -347,11 +324,9 @@ public final class PhoneLink: ObservableObject {
         }
         let slept = inactiveSince.map { Date().timeIntervalSince($0) } ?? 0
         inactiveSince = nil
-        // Back from sleep: ask at once, and give the answer the usual time to
-        // arrive before the silence before it counts against the phone.
         resumedAt = Date()
         queue.removeAll()
-        inFlight = nil
+        pingOut = false
         if slept > longSleep {
             // The phone app has most likely been sitting suspended, and will
             // end itself rather than answer (see SessionDelegate.staleGap).
@@ -359,30 +334,19 @@ public final class PhoneLink: ObservableObject {
             confirmed = false
             wakePhone(fresh: true)
         }
-        enqueue(nil)
+        ping()
     }
 
     // MARK: Input
 
-    public func move(dx: Double, dy: Double, dt: Double) {
-        enqueue(.move(dx: dx, dy: dy, dt: dt))
-    }
-
-    public func scroll(dx: Double, dy: Double) {
-        enqueue(.scroll(dx: dx, dy: dy))
-    }
-
-    /// Never merged. A click is a discrete intention; motion is a quantity,
-    /// and only a quantity can be summed.
-    public func click(_ button: WatchButton) {
-        enqueue(.click(button))
-    }
-
+    public func move(dx: Double, dy: Double, dt: Double) { enqueue(.move(dx: dx, dy: dy, dt: dt)) }
+    public func scroll(dx: Double, dy: Double) { enqueue(.scroll(dx: dx, dy: dy)) }
+    /// Never merged: a click is a discrete intention, and only motion is a
+    /// quantity that can be summed.
+    public func click(_ button: WatchButton) { enqueue(.click(button)) }
     /// In order behind the motion before it: a release that overtook the last
     /// move would let go of a selection one step short.
-    public func button(_ button: WatchButton, down: Bool) {
-        enqueue(.button(button, down: down))
-    }
+    public func button(_ button: WatchButton, down: Bool) { enqueue(.button(button, down: down)) }
 
     /// Asks the phone to switch to another of its computers.
     public func pick(_ computer: KnownComputer) {
@@ -391,24 +355,17 @@ public final class PhoneLink: ObservableObject {
 
     // MARK: Sending
 
-    /// Queues an event — nil for a heartbeat — and sends if nothing is out.
-    private func enqueue(_ event: WatchEvent?) {
-        if let event {
-            if let last = queue.last, let merged = Self.merge(last, event) {
-                queue[queue.count - 1] = merged
-            } else {
-                queue.append(event)
-            }
-        }
-        if event == nil && inFlight == nil && queue.isEmpty {
-            send([pingKey: true])
+    private func enqueue(_ event: WatchEvent) {
+        if let last = queue.last, let merged = Self.merge(last, event) {
+            queue[queue.count - 1] = merged
         } else {
-            pump()
+            queue.append(event)
         }
+        pump()
     }
 
     private func pump() {
-        guard inFlight == nil, !queue.isEmpty else { return }
+        guard !queue.isEmpty else { return }
         let wait = minimumGap - Date().timeIntervalSince(lastSent)
         guard wait <= 0 else {
             guard !pumpScheduled else { return }
@@ -421,79 +378,80 @@ public final class PhoneLink: ObservableObject {
             return
         }
         send(queue.removeFirst().payload)
+        if !queue.isEmpty { pump() }
     }
 
+    /// Fire and forget. A lost move is made good by the next one, which
+    /// carries the rest of the distance.
     private func send(_ message: [String: Any]) {
         let session = WCSession.default
         guard active, session.activationState == .activated, session.isReachable else {
             queue.removeAll()
             return
         }
-        // Defensive: the delegate is what receives replies, and nothing else
-        // should replace it — but if anything ever does, this says so.
-        if session.delegate !== delegate {
-            BridgeLog.note("session delegate was replaced; restoring")
-            session.delegate = delegate
-        }
-        generation += 1
-        let tag = generation
-        inFlight = tag
-        sentAt = Date()
-        lastSent = sentAt
+        lastSent = Date()
         sentCount += 1
+        let failed: @Sendable (Error) -> Void = { [weak self] error in
+            let text = SessionDelegate.describe(error)
+            Task { @MainActor in self?.noteFailure(text) }
+        }
+        session.sendMessage(message, replyHandler: nil, errorHandler: failed)
+    }
+
+    /// Asks the phone for its status and waits for the answer — the one
+    /// message that does.
+    private func ping() {
+        let session = WCSession.default
+        guard active, !pingOut, session.activationState == .activated, session.isReachable else { return }
+        pingOut = true
+        pingSentAt = Date()
 
         // Spelled out as @Sendable: WatchConnectivity calls these on its own
         // queue, and a closure formed inside a main-actor type that captures
         // it is otherwise inferred to be main-actor and traps on entry.
         let answered: @Sendable ([String: Any]) -> Void = { [weak self] reply in
             let status = PhoneStatus(payload: reply)
-            Task { @MainActor in self?.finished(tag, answer: status, ok: true) }
+            Task { @MainActor in
+                guard let self else { return }
+                self.pingOut = false
+                if let status { self.status = status }
+                self.heard(via: "reply")
+            }
         }
         let failed: @Sendable (Error) -> Void = { [weak self] error in
             let text = SessionDelegate.describe(error)
             Task { @MainActor in
-                self?.noteFailure(text)
-                self?.finished(tag, answer: nil, ok: false)
+                self?.pingOut = false
+                self?.noteFailure("heartbeat: \(text)")
             }
         }
-        session.sendMessage(message, replyHandler: answered, errorHandler: failed)
+        session.sendMessage([pingKey: true], replyHandler: answered, errorHandler: failed)
+    }
+
+    /// Something came back from the phone app just now.
+    private func heard(via channel: String) {
+        if failures > 0 {
+            BridgeLog.note("heard from phone by \(channel) after \(failures) failures")
+            failures = 0
+        }
+        lastHeard = Date()
+        alive = true
+        confirmed = true
+        wakeDelay = 3
     }
 
     private func noteFailure(_ text: String) {
         failures += 1
-        lastError = text
         let now = Date()
         if failures == 1 || now.timeIntervalSince(lastFailureLog) > 5 {
-            BridgeLog.note("send failed (\(failures) since last success): \(text); \(SessionDelegate.describe(WCSession.default))")
+            BridgeLog.note("failure (\(failures) since last heard): \(text); \(SessionDelegate.describe(WCSession.default))")
             lastFailureLog = now
         }
     }
 
-    private func finished(_ tag: Int, answer: PhoneStatus?, ok: Bool) {
-        // A message given up on by the timeout may still answer later; it is
-        // good news about the phone, but no longer what is in flight.
-        if ok {
-            if failures > 0 {
-                BridgeLog.note("send succeeded after \(failures) failures")
-                failures = 0
-            }
-            lastReply = Date()
-            alive = true
-            confirmed = true
-            // An empty answer is a phone app that has not worked out its
-            // status yet; keep what was there.
-            if let answer { status = answer }
-        }
-        guard inFlight == tag else { return }
-        inFlight = nil
-        // Lost motion is made good by the next message, which carries the
-        // rest of it, so a failure is not retried; the queue just moves on.
-        pump()
-    }
-
-    /// Twice a second: give up on a reply that is not coming, send a
-    /// heartbeat when the link has been quiet, decide whether the phone app
-    /// is still there, and ask it to be when it is not.
+    /// Twice a second: give up on a heartbeat that is not coming back, send
+    /// the next, decide whether the phone app is still there, and ask it to
+    /// be when it is not.
     private func tick() {
         guard active else { return }
         let now = Date()
@@ -504,16 +462,19 @@ public final class PhoneLink: ObservableObject {
             sentCount = 0
             lastRateLog = now
         }
-        if let tag = inFlight, now.timeIntervalSince(sentAt) > replyTimeout {
-            noteFailure("no reply in \(Int(replyTimeout))s")
-            finished(tag, answer: nil, ok: false)
+        if pingOut && now.timeIntervalSince(pingSentAt) > pingTimeout {
+            pingOut = false
+            noteFailure("heartbeat: no reply in \(Int(pingTimeout))s")
         }
-        let heardFrom = max(lastReply, resumedAt, startedAt)
-        if alive && now.timeIntervalSince(heardFrom) > aliveFor { alive = false }
-        if inFlight == nil && queue.isEmpty && now.timeIntervalSince(max(lastReply, sentAt)) >= pingEvery {
-            enqueue(nil)
+        if now.timeIntervalSince(pingSentAt) >= pingEvery { ping() }
+
+        let heardFrom = max(lastHeard, resumedAt, startedAt)
+        let silence = now.timeIntervalSince(heardFrom)
+        if alive && silence > aliveFor { alive = false }
+        if silence > firstWakeAfter && now.timeIntervalSince(lastWake) >= wakeDelay {
+            wakePhone()
+            wakeDelay = min(wakeDelay * 2, maxWakeDelay)
         }
-        if now.timeIntervalSince(heardFrom) > wakeAfter { wakePhone() }
     }
 
     /// Two moves in a row are sent as one, and two scrolls: ten small moves
@@ -538,14 +499,13 @@ public final class PhoneLink: ObservableObject {
     /// Asks the phone app to be running.
     ///
     /// A queued transfer rather than a message: a message needs the app to be
-    /// reachable, and it is unreachable exactly when it is not running, which
-    /// is the case this exists for. The transfer is delivered by launching the
-    /// app in the background — unless the user swiped it out of the app
-    /// switcher, in which case nothing will, and the watch has to say so.
+    /// reachable, and it is unreachable exactly when it is not running. The
+    /// transfer is delivered by launching the app in the background — unless
+    /// the user swiped it out of the app switcher, in which case nothing will,
+    /// and the watch has to say so.
     private func wakePhone(fresh: Bool = false) {
         let session = WCSession.default
         guard session.activationState == .activated else { return }
-        guard fresh || Date().timeIntervalSince(lastWake) >= wakeEvery else { return }
         lastWake = Date()
         // Undelivered transfers pile up, and a phone that comes back later
         // would otherwise be woken once for each.
@@ -575,19 +535,13 @@ public final class WatchReceiver {
     /// delivered through this is silent: no window, no scene, so whatever
     /// needs doing has to be done from here.
     public var onWake: (@MainActor (_ fresh: Bool) -> Void)?
-    /// A message from the watch arrived, already answered. For noticing
-    /// that the app has just been woken from suspension.
+    /// A message from the watch arrived. For noticing that the app has just
+    /// been woken from suspension.
     public var onPing: (@MainActor () -> Void)?
 
     private let delegate = SessionDelegate()
-
-    /// What the watch should be told, and what it has been told. Separate
-    /// because they happen at different times: activation is asynchronous,
-    /// and the first status is ready well before the session can carry it.
-    /// Dropping it then meant a phone that was already connected never told
-    /// the watch, and nothing changed to prompt a second try.
-    private var wanted = PhoneStatus()
-    private var sent: PhoneStatus?
+    private var current = PhoneStatus()
+    private var beats: Task<Void, Never>?
 
     public init() {}
 
@@ -597,20 +551,30 @@ public final class WatchReceiver {
         delegate.onPick = { [weak self] in self?.onPick?($0) }
         delegate.onWake = { [weak self] in self?.onWake?($0) }
         delegate.onPing = { [weak self] in self?.onPing?() }
-        delegate.onActivated = { [weak self] in self?.flush(force: true) }
-        // A watch that has just come within reach may have launched since the
-        // last status was sent.
+        delegate.onActivated = { [weak self] in self?.push() }
         delegate.onReachability = { [weak self] reachable in
-            if reachable { self?.flush(force: true) }
+            if reachable { self?.push() }
         }
 
         let session = WCSession.default
         session.delegate = delegate
         session.activate()
+
+        // The phone's own word that it is running, independent of replies:
+        // pushed every two seconds while the watch app is open and in reach,
+        // so the watch can still tell the phone app is there when answers to
+        // its heartbeats stop arriving.
+        beats = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self else { return }
+                if WCSession.default.isReachable { self.push() }
+            }
+        }
     }
 
-    /// What to do instead of answering when this process has gone stale in
-    /// the background; see `SessionDelegate.staleGap`. Called on
+    /// What to do instead of handling a message when this process has gone
+    /// stale in the background; see `SessionDelegate.staleGap`. Called on
     /// WatchConnectivity's queue.
     public func onStale(_ handler: @escaping @Sendable (TimeInterval) -> Void) {
         delegate.onStale = handler
@@ -629,23 +593,26 @@ public final class WatchReceiver {
         return SessionDelegate.describe(session) + ", delegate \(ours)"
     }
 
-    /// Application context: latest-wins, kept by the system for a watch app
-    /// that is not running, and free when nothing changed.
     public func publish(_ status: PhoneStatus) {
         delegate.reply = status
-        wanted = status
-        flush(force: false)
+        guard status != current else { return }
+        current = status
+        push()
     }
 
-    private func flush(force: Bool) {
-        guard force || wanted != sent else { return }
+    /// Application context: latest-wins, and kept by the system for a watch
+    /// app that is not running. Stamped with the time, which both lets the
+    /// watch tell a fresh push from a late one and makes every push differ —
+    /// an identical context is not delivered again.
+    private func push() {
         let session = WCSession.default
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
+        var context = current.payload
+        context[atKey] = Date().timeIntervalSince1970
         do {
-            try session.updateApplicationContext(wanted.payload)
-            sent = wanted
+            try session.updateApplicationContext(context)
         } catch {
-            print("watch context: \(error)")
+            BridgeLog.note("context push failed: \(SessionDelegate.describe(error))")
         }
     }
 }

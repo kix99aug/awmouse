@@ -557,9 +557,15 @@ attacker a WireGuard session and a refusal.
   process ends — and the wake request the watch sends on waking launches a
   fresh one. The watch shows "reconnecting" until that one answers, so the
   light turns green once, and stays.
-  Every message is answered with the phone's status, and the watch sends the
-  next only after the answer — at a fixed 30 Hz without waiting, sends began
-  failing outright with IDS errors.
+  Later logs showed the opposite direction failing too: replies from the phone
+  stopped reaching the watch, across fresh processes on both sides, while the
+  watch's messages and wake transfers kept arriving at the phone. So input no
+  longer waits on replies: events go fire-and-forget at most every 50 ms, with
+  motion merging in between, and whether the phone app is there is judged by
+  either of two independent signals — a heartbeat's reply, or a status the
+  phone pushes as application context every two seconds, stamped so that a
+  late one does not count. Wake requests back off from three seconds to
+  thirty.
 - **The phone keeps a list of computers, not just the last one.** A person
   with a laptop and a desktop pairs with both and picks; the most recent is
   reconnected to without being asked, and the rest are one tap away when that
