@@ -220,6 +220,22 @@ public final class PhoneLink: ObservableObject {
     /// that one lost reply does not stop everything behind it.
     private let replyTimeout: TimeInterval = 3
 
+    /// The least time between two messages, whatever the answers allow.
+    ///
+    /// Waiting for each answer bounds the rate by the round trip, and a fast
+    /// round trip is a high rate: turning the crown produces a change every
+    /// few milliseconds, and stalls came most often while scrolling. 50 ms
+    /// caps it at twenty messages a second. Nothing is lost by it — motion
+    /// arriving in the gap merges into the next message — and the delay is
+    /// below what a hand on a trackpad notices.
+    private let minimumGap: TimeInterval = 0.05
+    private var lastSent = Date.distantPast
+    private var pumpScheduled = false
+
+    /// Messages sent, for a rate in the log every few seconds.
+    private var sentCount = 0
+    private var lastRateLog = Date()
+
     /// How long without any answer before a heartbeat is sent, and before the
     /// phone app counts as gone. Two missed beats, plus slack for a phone app
     /// that has to be woken to answer.
@@ -342,6 +358,17 @@ public final class PhoneLink: ObservableObject {
 
     private func pump() {
         guard inFlight == nil, !queue.isEmpty else { return }
+        let wait = minimumGap - Date().timeIntervalSince(lastSent)
+        guard wait <= 0 else {
+            guard !pumpScheduled else { return }
+            pumpScheduled = true
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(wait))
+                self?.pumpScheduled = false
+                self?.pump()
+            }
+            return
+        }
         send(queue.removeFirst().payload)
     }
 
@@ -361,6 +388,8 @@ public final class PhoneLink: ObservableObject {
         let tag = generation
         inFlight = tag
         sentAt = Date()
+        lastSent = sentAt
+        sentCount += 1
 
         // Spelled out as @Sendable: WatchConnectivity calls these on its own
         // queue, and a closure formed inside a main-actor type that captures
@@ -417,6 +446,13 @@ public final class PhoneLink: ObservableObject {
     private func tick() {
         guard active else { return }
         let now = Date()
+        if now.timeIntervalSince(lastRateLog) >= 5 {
+            if sentCount > 0 {
+                BridgeLog.note(String(format: "sent %d messages in %.0fs", sentCount, now.timeIntervalSince(lastRateLog)))
+            }
+            sentCount = 0
+            lastRateLog = now
+        }
         if let tag = inFlight, now.timeIntervalSince(sentAt) > replyTimeout {
             noteFailure("no reply in \(Int(replyTimeout))s")
             finished(tag, answer: nil, ok: false)
