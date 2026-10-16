@@ -132,9 +132,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: space.keybo.awmouse.watchkitapp
         MARKETING_VERSION: "0.3"
         CURRENT_PROJECT_VERSION: "${BUILD_NUMBER}"
-        # A watch app has no icon catalog of its own yet; without this Xcode
-        # looks for one named AppIcon and warns on every build.
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # The phone's artwork, from the same icon.svg; watchOS masks it to a
+        # circle, and everything in it sits inside that circle already.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
     info:
       path: watch/Info.plist

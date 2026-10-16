@@ -10,19 +10,25 @@ export BUILD_NUMBER ?= 1
 
 ICON_SVG  := icon.svg
 ICON_PNG  := awmouse/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+WATCH_ICON_PNG := watch/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 
 .PHONY: project open clean tunnel icon
 
 ## Rasterise icon.svg into the asset catalog. The SVG is the source; edit it,
 ## not the PNG. QuickLook renders it, then the alpha channel is stripped,
 ## because App Store Connect rejects icons that have one.
-icon: $(ICON_PNG)
+icon: $(ICON_PNG) $(WATCH_ICON_PNG)
 
 $(ICON_PNG): $(ICON_SVG) tools/flatten.swift
 	$(eval TMP := $(shell mktemp -d))
 	qlmanage -t -s 1024 -o $(TMP) $(ICON_SVG) >/dev/null 2>&1
 	swift tools/flatten.swift $(TMP)/$(ICON_SVG).png $@
 	rm -rf $(TMP)
+
+# The watch shows the same artwork. A copy rather than a second rendering, so
+# the two can never drift apart.
+$(WATCH_ICON_PNG): $(ICON_PNG)
+	cp $< $@
 
 ## Regenerate the Xcode project from project.yml.
 ##
