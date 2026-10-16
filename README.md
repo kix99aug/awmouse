@@ -309,6 +309,15 @@ git tag v0.2 && git push --tags
 
 The tag starts `ios-signed` on its own. Its first step refuses a tag that
 disagrees with the project version, so a tag cannot ship the wrong number.
+
+The same tag runs `host`, whose last step creates the GitHub release for it —
+titled from the version, with the release commit's message as its notes —
+and attaches the macOS and Windows downloads. It needs a `GITHUB_TOKEN`
+secure variable in a Codemagic environment group named `github`: a
+fine-grained token on this repository with **Contents: read and write**.
+Without it the step says so and skips. For a tag pushed before the step
+existed, start `host` by hand on `main` with `RELEASE_TAG=v0.4` (or whichever);
+it refuses if `host/` has changed since that tag.
 External testers need a `beta_groups` entry in `codemagic.yaml` and pass
 through beta review once.
 

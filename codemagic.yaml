@@ -61,6 +61,9 @@ workflows:
       xcode: latest
       groups:
         - signing
+        # GITHUB_TOKEN, for the release step at the end. A fine-grained token
+        # on this repository with Contents read and write is all it needs.
+        - github
     scripts:
       - *install_go
       - name: Install the Windows cross-compiler
@@ -158,6 +161,49 @@ workflows:
         script: |
           CGO_ENABLED=0 GOOS=ios GOARCH=arm64 go build ./mobile/...
           CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./mobile/...
+      - name: Publish to GitHub Releases
+        working_directory: host
+        # A version tag gets a release page with both downloads on it. The
+        # phone and watch apps are not attached: their build is signed for App
+        # Store distribution and installs from TestFlight, not from a file.
+        script: |
+          # On a tag build, that tag. By hand, RELEASE_TAG names one — for a
+          # tag pushed before this step existed, whose own build cannot run it.
+          tag="${CM_TAG:-${RELEASE_TAG:-}}"
+          if [ -z "$tag" ]; then echo "not a release build; nothing to publish"; exit 0; fi
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            echo "GITHUB_TOKEN not set (environment group 'github'); not publishing $tag"
+            exit 0
+          fi
+          git fetch --tags --quiet origin || true
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "no tag $tag in this repository"; exit 1
+          fi
+          # By hand the build is of a branch, not the tag. Its downloads may
+          # only go on that tag's page if the host code is the same, or the
+          # release would carry a different program from the one it names.
+          if [ -z "${CM_TAG:-}" ] && ! git diff --quiet "$tag" HEAD -- . ; then
+            echo "host/ differs from $tag; build the tag itself instead"; exit 1
+          fi
+
+          command -v gh >/dev/null || brew install gh
+          repo=$(git remote get-url origin | sed -E 's#^(git@github\.com:|https://([^@/]*@)?github\.com/)##; s#\.git$##')
+
+          # The notes are the release commit's message, which is written as
+          # release notes already, without its trailers.
+          # Command substitution drops the blank lines the trailers leave.
+          body=$(git log -1 --format=%b "$tag" | grep -vE '^(Co-Authored-By|Claude-Session):')
+          notes=$(mktemp)
+          printf '%s\n\nThe iPhone and Apple Watch apps are distributed through TestFlight.\n' "$body" > "$notes"
+
+          if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$repo" --verify-tag \
+              --title "awmouse ${tag#v}" --notes-file "$notes"
+          fi
+          # --clobber, so that publishing again replaces rather than fails.
+          gh release upload "$tag" dist/awmouse-macos.zip dist/awmouse-win.zip \
+            --repo "$repo" --clobber
+          echo "published https://github.com/$repo/releases/tag/$tag"
     artifacts:
       - host/dist/awmouse-macos.zip
       - host/dist/awmouse-win.zip
