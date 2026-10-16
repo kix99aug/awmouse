@@ -33,8 +33,9 @@ type Curve struct {
 // losing pixel-level control.
 var DefaultCurve = Curve{Base: 0.72, K: 0.0013, P: 1.0, Min: 0.5, Max: 5.0}
 
-// Scroll uses a flat multiplier rather than the pointer curve: scrolling reads
-// as distance travelled, not as velocity, so acceleration makes it feel loose.
+// ScrollConfig is a flat multiplier, deliberately not the pointer curve:
+// scrolling reads as distance travelled, not as velocity, so acceleration
+// makes it feel loose.
 type ScrollConfig struct {
 	Gain   float64
 	Invert bool

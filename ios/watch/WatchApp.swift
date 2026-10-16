@@ -6,8 +6,8 @@ struct WatchApp: App {
     @StateObject private var controller = WatchController()
 
     init() {
-        BridgeLog.setSink { WatchLog.note($0) }
-        WatchLog.note("launch")
+        BridgeLog.setSink { FileLog.bridge.note($0) }
+        FileLog.bridge.note("launch")
     }
 
     var body: some Scene {
@@ -17,4 +17,9 @@ struct WatchApp: App {
                 .onAppear { controller.activate() }
         }
     }
+}
+
+extension FileLog {
+    /// The watch's side of the link.
+    static let bridge = FileLog(name: "bridge")
 }

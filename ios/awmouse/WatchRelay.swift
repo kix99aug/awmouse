@@ -26,7 +26,7 @@ final class WatchRelay: ObservableObject {
     private var watching: Set<AnyCancellable> = []
 
     /// For the log: when the watch last checked in, and how much it sent.
-    private var lastPing = Date.distantPast
+    private var lastMessage = Date.distantPast
     private var relayed = 0
     private var dropped = 0
     private var heard = 0
@@ -39,7 +39,7 @@ final class WatchRelay: ObservableObject {
         // Woken by the watch with no window: someone is holding the watch
         // and wants the cursor.
         receiver.onWake = { [weak self] in self?.wokenByWatch(fresh: $0) }
-        receiver.onPing = { [weak self] in self?.pinged() }
+        receiver.onMessage = { [weak self] in self?.heard(after: $0) }
     }
 
     /// What WatchConnectivity believes right now, for the log.
@@ -53,27 +53,32 @@ final class WatchRelay: ObservableObject {
         // The first message after the watch has slept is where a stale
         // background process ends itself instead of answering — decided on
         // WatchConnectivity's queue, so the delegate is told the app's state
-        // as it changes rather than asking for it there.
+        // as it changes rather than asking for it there. Logged with what the
+        // session believed at that moment: the relay once went silent with
+        // the app in front and otherwise working.
         receiver.setInBackground(UIApplication.shared.applicationState == .background)
-        for (name, background) in [
-            (UIApplication.didEnterBackgroundNotification, true),
-            (UIApplication.willEnterForegroundNotification, false),
-        ] {
+        for (name, label, background) in [
+            (UIApplication.didEnterBackgroundNotification, "entered background", true),
+            (UIApplication.willEnterForegroundNotification, "entering foreground", false),
+            (UIApplication.willTerminateNotification, "terminating", nil),
+        ] as [(Notification.Name, String, Bool?)] {
             NotificationCenter.default.publisher(for: name)
-                .sink { [weak self] _ in self?.receiver.setInBackground(background) }
+                .sink { [weak self] _ in
+                    guard let self else { return }
+                    FileLog.relay.note("\(label); wc \(self.receiver.sessionState)")
+                    if let background { self.receiver.setInBackground(background) }
+                }
                 .store(in: &watching)
         }
         receiver.onStale { gap in
-            RelayLog.note(String(format: "first watch message after %.0fs silence reached a stale background process; ending it so the watch's wake request launches a fresh one", gap))
-            RelayLog.flush()
-            exit(0)
+            Self.endProcess(String(format: "first watch message after %.0fs silence reached a stale background process", gap))
         }
 
         receiver.activate()
 
         client.$state
             .removeDuplicates()
-            .sink { RelayLog.note("client \($0)") }
+            .sink { FileLog.relay.note("client \($0)") }
             .store(in: &watching)
 
         client.$state
@@ -119,16 +124,15 @@ final class WatchRelay: ObservableObject {
     /// gap means this app was not running to answer — suspended, most likely,
     /// and woken just now by this very message — and the tunnel may not have
     /// survived that.
-    private func pinged() {
-        let gap = Date().timeIntervalSince(lastPing)
-        lastPing = Date()
+    private func heard(after gap: TimeInterval) {
+        lastMessage = Date()
         stalled = false
         heard += 1
         startTally()
-        if gap > 6 && gap < .infinity {
-            // The same threshold the delegate used when it answered this
-            // message "reconnecting".
-            RelayLog.note(String(format: "watch ping after %.0fs gap; checking link", gap))
+        if gap > WatchReceiver.suspensionGap && gap < .infinity {
+            // The delegate has already answered this message "reconnecting";
+            // this is what makes that true.
+            FileLog.relay.note(String(format: "watch message after %.0fs gap; checking link", gap))
             client.verifyLink()
         }
     }
@@ -156,28 +160,33 @@ final class WatchRelay: ObservableObject {
     /// that sat through it is ended just the same — it is the kind that
     /// stalls — but in front nothing is wrong, so there is no banner.
     private func wokenByWatch(fresh: Bool) {
-        let age = Date().timeIntervalSince(AppCore.shared.launchedAt)
         let background = UIApplication.shared.applicationState == .background
-        guard age > 10, background || !fresh else {
-            RelayLog.note(fresh ? "woken by watch after its sleep" : "woken by watch")
+        guard !receiver.processIsFresh, background || !fresh else {
+            FileLog.relay.note(fresh ? "woken by watch after its sleep" : "woken by watch")
             client.connectForRemoteUse()
             return
         }
-        let quiet = Date().timeIntervalSince(lastPing)
-        RelayLog.note(String(format: "wake request %.0fs into this process, %.1fs since last message: watch is not hearing us", age, quiet))
-        if background {
-            RelayLog.note("ending this process so the watch can launch a fresh one")
-            RelayLog.flush()
-            exit(0)
-        }
+        let quiet = Date().timeIntervalSince(lastMessage)
+        let reason = String(format: "wake request %.1fs after the last message: the watch is not hearing us", quiet)
+        if background { Self.endProcess(reason) }
+        FileLog.relay.note(reason)
         stalled = true
+    }
+
+    /// Ends this process so that the watch's next wake request launches a
+    /// fresh one. The one place the app quits itself; see `wokenByWatch` for
+    /// why it has to, and for why App Review would rather it did not.
+    private nonisolated static func endProcess(_ reason: String) -> Never {
+        FileLog.relay.note("\(reason); ending this process so the watch can launch a fresh one")
+        FileLog.relay.flush()
+        exit(0)
     }
 
     /// The watch's computer picker. An explicit choice, like tapping the
     /// computer in the phone's own list.
     private func pick(_ id: String) {
         guard let host = client.hosts.first(where: { $0.address == id }) else { return }
-        RelayLog.note("watch picked \(host.name)")
+        FileLog.relay.note("watch picked \(host.name)")
         client.connect(to: host)
     }
 
@@ -222,7 +231,7 @@ extension WatchRelay {
         tally = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard let self else { return }
-            RelayLog.note("heard \(self.heard) messages; relayed \(self.relayed), dropped \(self.dropped) while not connected")
+            FileLog.relay.note("heard \(self.heard) messages; relayed \(self.relayed), dropped \(self.dropped) while not connected")
             self.heard = 0
             self.relayed = 0
             self.dropped = 0

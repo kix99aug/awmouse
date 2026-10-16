@@ -618,46 +618,38 @@ the same channel.
 
 Each stage validates the next:
 
-1. **`MotionInput` shared package** — sensor math + protocol types, no I/O.
+1. **`MotionInput` shared package** — sensor math, no I/O.
 2. **iPhone touch-trackpad + host + tailcat pipe + QR pairing** — proves
    the whole path end to end using the easiest, most reliable input source.
 3. **iPhone gyro air-mouse** — exercises the sensor pipeline without needing
    WatchConnectivity yet.
-4. **watchOS app** — same shared package, relaying through a phone app that
-   already works.
+4. **watchOS app** — a trackpad relaying through a phone app that already
+   works. It shares `WatchBridge` with the phone, not `MotionInput`: the watch
+   reads no sensor.
 
 ## Open questions / risks
 
 Roughly in order of how likely they are to hurt:
 
-0. **WatchConnectivity at pointer rates.** It is built for occasional small
-   messages, not a stream, and no amount of reasoning settles what it will
-   actually carry. Motion is therefore accumulated on the watch and flushed at
-   30 Hz, and the watch counts what the link refuses and measures a round trip
-   once a second — so the first wrist-test produces a number rather than an
-   impression. If the drops are high, the rate comes down.
-0. **watchOS suspends an app when the wrist drops.** Aiming would stop with
-   it. Keeping a watch app alive means an extended runtime session, and the
-   categories those come in — mindfulness, physical therapy — do not include
-   "mouse"; claiming one to dodge the rule is the sort of thing review exists
-   to catch. Whether this matters depends on how long the screen stays lit
-   while an arm is actually aiming, which is a measurement, not an argument.
-
-1. **Tap false positives.** Arm swing during normal movement resembles a tap
-   spike. Needs tuning against recorded sensor traces; a fixed threshold picked
-   by guessing will not hold up.
+1. **WatchConnectivity's reliability.** It is built for occasional small
+   messages, not a stream. The first answer was a rate — events now go at
+   most every 50 ms, merged in between — but the harder one was that its live
+   messaging stalls outright, in one direction or both, while every session
+   property reads healthy. What is done about that is under the relay bullets
+   above; what is not known is whether it covers every way it stalls.
 2. **Latency budget.** Three hops (watch → phone → host → OS). Each needs to
    stay lean or the cursor feels laggy. Measure early, on the real path.
 3. **macOS Accessibility permission.** Real first-run UX friction.
 4. **tailcat specifics** — mostly settled. The library (`github.com/tailscale/tailcat`,
    v0.6.0) exposes `Server` with an `OnTCP` accept hook and `Client.DialTCPPort`;
    the address is ~260 bytes of base64url, which is a comfortable QR. The
-   host and phone halves pass a loopback-relay test, and the phone package
-   cross-compiles for `ios/arm64` and `android/arm64` with cgo off. What is
-   still unverified is `gomobile bind` itself and the Swift bridging, which
-   need a Mac.
+   host and phone halves pass a loopback-relay test, the phone package
+   cross-compiles for `ios/arm64` and `android/arm64` with cgo off, and the
+   gomobile binding has carried every phone session since the first one.
 5. **Background execution** on iOS while the phone is pocketed and the watch is
-   driving — may constrain how the relay stays alive.
+   driving. Answered, unkindly: a phone app launched in the background is
+   suspended a few minutes in, and that is where the relay's stalls begin. The
+   relay works around it by starting a fresh process; see the relay bullets.
 6. **Windows `uiAccess` — deferred, not rejected.** Running elevated is the
    remedy the host offers today, via a notice at startup and a one-click
    restart. A manifest with `uiAccess="true"` would be better: it bypasses

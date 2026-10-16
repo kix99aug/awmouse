@@ -1,34 +1,29 @@
 # awmouse
 
-Use a phone (and later an Apple Watch) as a remote mouse for a computer.
+Use an iPhone or an Apple Watch as a remote mouse for a computer.
 
-Design and rationale live in [DESIGN.md](DESIGN.md). This file is just how to
-run the POC.
+Design and rationale live in [DESIGN.md](DESIGN.md). This file is how to use
+and build it.
 
 ## Status
 
-iPhone trackpad and air mouse → macOS or Windows cursor, over tailcat.
-Confirmed working on device.
+iPhone trackpad and air mouse, and the Apple Watch trackpad → macOS or
+Windows cursor, over tailcat. Working on device.
 
 | Piece | State |
 |---|---|
 | macOS injection (`CGEvent`, absolute) | working |
 | Acceleration curve + cursor state | working, untuned |
 | iPhone trackpad, full gesture set | working |
-| iPhone air mouse (gyro) | builds, needs on-device testing |
+| iPhone air mouse (gyro) | working |
 | Shared `MotionInput` package | working, unit tested |
-| QR pairing | host renders it; in-app scanner not built (manual entry works) |
-| tailcat transport | host side working, tested over a loopback relay; phone framework written, not yet bound or run on a device |
+| QR pairing | working — the in-app scanner, or the stock Camera app through the deep link |
+| tailcat transport | working, phone to host, from any network |
 | Windows injection (`SendInput`, absolute) | working, driven from the phone; elevated windows need the host elevated too, which it offers at startup |
 | Linux injection (`uinput`) | not started |
 | watchOS app | working, relayed through the phone app; watchOS 11 or later |
 
 ## Gestures
-
-| Gesture | Action |
-|---|---|
-Everything common is reachable with one finger; the multi-finger gestures are
-conveniences, since two fingers are awkward while one hand holds the phone.
 
 ### On the watch
 
@@ -66,6 +61,9 @@ cursor slid off whatever you were clicking. The phone keeps its gyro mode,
 where the hand that clicks is not the hand that aims.
 
 ### On the phone
+
+Everything common is reachable with one finger; the multi-finger gestures are
+conveniences, since two fingers are awkward while one hand holds the phone.
 
 | Gesture | Action |
 |---|---|

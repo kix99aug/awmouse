@@ -1,7 +1,7 @@
 import Foundation
 
 /// A computer the phone has paired with.
-public struct KnownComputer: Equatable, Hashable, Sendable, Identifiable {
+public struct KnownComputer: Equatable, Sendable, Identifiable {
     /// Identifies the computer between the two apps. It is the tailcat
     /// address, because that is what the phone keys its list on; the watch
     /// never dials it.

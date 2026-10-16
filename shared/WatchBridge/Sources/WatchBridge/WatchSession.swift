@@ -30,7 +30,8 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
     var onReachability: (@MainActor (Bool) -> Void)?
     var onActivated: (@MainActor () -> Void)?
     var onWake: (@MainActor (_ fresh: Bool) -> Void)?
-    var onPing: (@MainActor () -> Void)?
+    /// A message arrived, after this much silence since the one before.
+    var onMessage: (@MainActor (_ gap: TimeInterval) -> Void)?
 
     /// Set by the phone app: what to do instead of handling a message, when
     /// the first one after a long silence reaches a process that has been
@@ -68,7 +69,13 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
     /// ends, and the wake request the watch sends on waking launches a fresh
     /// one. A process a few seconds old is that fresh one, and carries on.
     static let staleGap: TimeInterval = 10
-    private static let freshFor: TimeInterval = 10
+    static let freshFor: TimeInterval = 10
+
+    /// Whether this process started only moments ago — the replacement the
+    /// watch has just launched, rather than one that has been sitting around.
+    var processIsFresh: Bool {
+        Date().timeIntervalSince(started) <= Self.freshFor
+    }
 
     /// Notes a message's arrival. Returns the silence before it, and whether
     /// this process should end instead of handling it.
@@ -119,7 +126,7 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         let (gap, stale) = arrived()
         if stale { return end(after: gap) }
-        handle(message)
+        handle(message, after: gap)
     }
 
     /// A heartbeat, answered on the spot from the snapshot — the handler is
@@ -133,16 +140,16 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
         // replacement, which is what the watch is waiting for.
         if stale { return end(after: gap) }
         replyHandler(status(after: gap)?.payload ?? [:])
-        handle(message)
+        handle(message, after: gap)
     }
 
     private func end(after gap: TimeInterval) {
         onStale?(gap)
     }
 
-    private func handle(_ message: [String: Any]) {
+    private func handle(_ message: [String: Any], after gap: TimeInterval) {
         // Any message is the watch checking in, events included.
-        Task { @MainActor in self.onPing?() }
+        Task { @MainActor in self.onMessage?(gap) }
         if message[pingKey] != nil { return }
         if let address = message[pickKey] as? String {
             Task { @MainActor in self.onPick?(address) }
@@ -209,13 +216,10 @@ final class SessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendable {
 /// there and what it is doing.
 @MainActor
 public final class PhoneLink: ObservableObject {
-    /// Whether the iPhone is nearby. Not whether the app is running — see
-    /// `alive`.
-    @Published public private(set) var reachable = false
-
     /// Whether the phone app has been heard from lately — a heartbeat answered
-    /// or a status pushed just now. This, not `reachable`, says the phone app
-    /// is actually there.
+    /// or a status pushed just now. This, not WatchConnectivity's
+    /// `isReachable` — which on a watch means only that the iPhone is nearby —
+    /// says the phone app is actually there.
     @Published public private(set) var alive = false {
         didSet { if alive != oldValue { BridgeLog.note("phone app \(alive ? "heard from" : "silent")") } }
     }
@@ -288,8 +292,10 @@ public final class PhoneLink: ObservableObject {
     public func activate() {
         guard WCSession.isSupported(), timer == nil else { return }
         startedAt = Date()
+        // In reach again: send what queued up meanwhile. Being in reach says
+        // only that the iPhone is nearby, not that the app is running, so it
+        // decides nothing else.
         delegate.onReachability = { [weak self] in
-            self?.reachable = $0
             if $0 { self?.pump() }
         }
         delegate.onStatus = { [weak self] status, current in
@@ -535,9 +541,16 @@ public final class WatchReceiver {
     /// delivered through this is silent: no window, no scene, so whatever
     /// needs doing has to be done from here.
     public var onWake: (@MainActor (_ fresh: Bool) -> Void)?
-    /// A message from the watch arrived. For noticing that the app has just
-    /// been woken from suspension.
-    public var onPing: (@MainActor () -> Void)?
+    /// A message from the watch arrived, after this much silence. A long one
+    /// — over `suspensionGap` — means this app was probably suspended in
+    /// between, and has just been woken by the message.
+    public var onMessage: (@MainActor (_ gap: TimeInterval) -> Void)?
+
+    /// See `SessionDelegate.suspensionGap`.
+    public static let suspensionGap = SessionDelegate.suspensionGap
+
+    /// Whether this process is the fresh one the watch just launched.
+    public var processIsFresh: Bool { delegate.processIsFresh }
 
     private let delegate = SessionDelegate()
     private var current = PhoneStatus()
@@ -550,7 +563,7 @@ public final class WatchReceiver {
         delegate.onEvent = { [weak self] in self?.onEvent?($0) }
         delegate.onPick = { [weak self] in self?.onPick?($0) }
         delegate.onWake = { [weak self] in self?.onWake?($0) }
-        delegate.onPing = { [weak self] in self?.onPing?() }
+        delegate.onMessage = { [weak self] in self?.onMessage?($0) }
         delegate.onActivated = { [weak self] in self?.push() }
         delegate.onReachability = { [weak self] reachable in
             if reachable { self?.push() }

@@ -15,10 +15,6 @@ final class AppCore {
     static let shared = AppCore()
 
     let client = Client()
-
-    /// When this process started. The watch relay uses it to tell a process
-    /// just launched by the watch from one that has been running a while.
-    let launchedAt = Date()
     lazy var air = AirMouse(client: client)
     lazy var watch = WatchRelay(client: client)
 
@@ -27,22 +23,13 @@ final class AppCore {
     /// Called from the app delegate, on every launch including the silent
     /// ones.
     func start() {
-        BridgeLog.setSink { RelayLog.note("wc: \($0)") }
-        RelayLog.note("launch, \(UIApplication.shared.applicationState == .background ? "in background" : "in foreground")")
-        for (name, label) in [
-            (UIApplication.didEnterBackgroundNotification, "entered background"),
-            (UIApplication.willEnterForegroundNotification, "entering foreground"),
-            (UIApplication.willTerminateNotification, "terminating"),
-        ] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
-                RelayLog.note(label)
-                // The relay once went silent with the app in the foreground
-                // and working; this is what the session thought at the time.
-                MainActor.assumeIsolated {
-                    RelayLog.note("wc state: \(AppCore.shared.watch.sessionState)")
-                }
-            }
-        }
+        BridgeLog.setSink { FileLog.relay.note("wc: \($0)") }
+        FileLog.relay.note("launch, \(UIApplication.shared.applicationState == .background ? "in background" : "in foreground")")
         watch.activate()
     }
+}
+
+extension FileLog {
+    /// The phone's side of the watch link.
+    static let relay = FileLog(name: "relay")
 }

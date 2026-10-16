@@ -24,10 +24,11 @@ import (
 	"awmouse/host/internal/transport"
 )
 
-// The one transport is tailcat: end-to-end encrypted, reachable from any
-// network, brokered through a relay only until a direct path exists — which
-// on the same LAN it finds at once, so a separate local-network transport
-// would add a choice without adding a capability.
+// Settings is what the host can be configured with. There is no choice of
+// transport among them: the one transport is tailcat — end-to-end encrypted,
+// reachable from any network, brokered through a relay only until a direct
+// path exists, which on the same LAN it finds at once — so a separate
+// local-network transport would add a choice without adding a capability.
 type Settings struct {
 	IdentityPath string // tailcat identity file; empty means the per-user default
 	PairedPath   string // paired-device list; empty means beside the identity
