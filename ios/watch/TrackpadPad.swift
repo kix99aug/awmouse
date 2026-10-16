@@ -29,6 +29,7 @@ struct TrackpadPad: View {
                     .onChanged { gesture.update($0) }
                     .onEnded { _ in gesture.cancelled() }
             )
+            .onDisappear { gesture.abandon() }
     }
 
     /// The whole gesture set, written out. There is nowhere else to put it —

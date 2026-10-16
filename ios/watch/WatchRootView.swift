@@ -23,28 +23,22 @@ struct WatchRootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        Group {
-            if controller.phoneMissing {
-                PhoneMissingView()
-            } else {
-                // A navigation stack for one thing: it is what gives a watch
-                // app the toolbar slot in the top corner beside the clock,
-                // which is otherwise dead space, and that is where settings
-                // live.
-                NavigationStack {
-                    pad
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button { showingSettings = true } label: {
-                                    Image(systemName: "gearshape")
-                                }
-                            }
+        // A navigation stack for one thing: it is what gives a watch app the
+        // toolbar slot in the top corner beside the clock, which is otherwise
+        // dead space, and that is where settings live — on every screen, since
+        // speed can be set and another computer picked whatever the state.
+        NavigationStack {
+            content
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { showingSettings = true } label: {
+                            Image(systemName: "gearshape")
                         }
-                        .sheet(isPresented: $showingSettings) {
-                            SettingsView().environmentObject(controller)
-                        }
+                    }
                 }
-            }
+                .sheet(isPresented: $showingSettings) {
+                    SettingsView().environmentObject(controller)
+                }
         }
         // Advertised whenever the phone app is out of reach, not only once
         // the full-screen notice is up: the sooner the phone offers awmouse on
@@ -60,18 +54,26 @@ struct WatchRootView: View {
         }
     }
 
+    /// The trackpad only when it will work. Anything else takes the whole
+    /// screen: a small status line over a trackpad invites the finger to try
+    /// it, and a gesture that goes nowhere is worse than one that is not
+    /// offered.
+    @ViewBuilder private var content: some View {
+        if controller.canReachCursor {
+            pad
+        } else {
+            StateScreen(state: screenState)
+        }
+    }
+
     private var pad: some View {
-        // The pad is the whole screen. Everything else is drawn on top of it
-        // rather than beside it: this display is small enough that a status
-        // line costing a row of pixels costs a usable fraction of the surface
-        // the finger has to work with.
+        // The pad is the whole screen. The one line drawn over it says which
+        // computer it drives, and takes no touches: a finger landing on it is
+        // still a finger on the trackpad.
         TrackpadPad(controller: controller)
             .ignoresSafeArea(edges: [.horizontal, .bottom])
-            // Not hit testable: a finger landing on the readout is still a
-            // finger on the trackpad, and without this the status becomes a
-            // dead strip across the one surface the app has.
             .overlay(alignment: .top) {
-                status.padding(.horizontal, 6).allowsHitTesting(false)
+                connectedLine.padding(.horizontal, 6).allowsHitTesting(false)
             }
             .focusable(true)
             .focused($crownFocused)
@@ -87,99 +89,124 @@ struct WatchRootView: View {
             }
     }
 
-    /// The phone first, then the computer: the watch reaches the computer
-    /// only through the phone app, so a missing phone outranks anything it
-    /// last said.
-    @ViewBuilder private var status: some View {
+    private var connectedLine: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "circle.fill")
+                .font(.system(size: 6))
+                .foregroundStyle(Color.green)
+            Text(controller.status?.current.map(Self.label) ?? "connected")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    /// Every state but working, in the order that matters: the phone first,
+    /// because the watch reaches the computer only through the phone app, so
+    /// a missing phone outranks anything it last said.
+    private var screenState: StateScreen.State {
+        let name = controller.status?.current.map(Self.label)
+
+        if controller.phoneMissing {
+            return .init(symbol: "iphone", colour: .orange, busy: true,
+                         title: "Open awmouse\non your iPhone",
+                         detail: "Your watch reaches the computer through it. It's on your iPhone's lock screen.")
+        }
         if !controller.reachable {
-            // Out of reach, but not for long enough to give up: the watch is
-            // waking it.
-            dot(.yellow, "iPhone", detail: "waking", busy: true)
-        } else if !controller.confirmed {
-            // Awake again after a long sleep, waiting for the phone's first
-            // answer. What it said before the sleep is stale.
-            dot(.yellow, controller.status?.current.map(Self.label) ?? "iPhone",
-                detail: "reconnecting", busy: true)
-        } else if let status = controller.status {
-            let name = status.current.map(Self.label)
-            switch status.phase {
-            case .connected:
-                dot(.green, name ?? "connected")
-            case .connecting:
-                dot(.yellow, name ?? "computer", detail: status.note ?? "connecting", busy: true)
-            case .idle:
-                if status.computers.isEmpty {
-                    dot(.orange, "pair a computer on iPhone")
-                } else {
-                    dot(.orange, name ?? "no computer", detail: status.note)
-                }
+            // Unanswered, but not for long enough to give up: the watch is
+            // asking for the phone app.
+            return .init(symbol: "iphone", colour: .yellow, busy: true,
+                         title: "Waking iPhone", detail: nil)
+        }
+        if !controller.confirmed {
+            // Awake again after a long sleep: what the phone said before is
+            // stale, and it is starting afresh.
+            return .init(symbol: "arrow.triangle.2.circlepath", colour: .yellow, busy: true,
+                         title: "Reconnecting", detail: name)
+        }
+        guard let status = controller.status else {
+            return .init(symbol: "iphone", colour: .yellow, busy: true,
+                         title: "Waiting for iPhone", detail: nil)
+        }
+        switch status.phase {
+        case .connected:
+            // Connected but not drivable cannot happen today; said plainly
+            // rather than drawn as a trackpad that does nothing.
+            return .init(symbol: "desktopcomputer", colour: .yellow, busy: true,
+                         title: "Connecting", detail: name)
+        case .connecting:
+            let again = status.note == "reconnecting"
+            return .init(symbol: again ? "arrow.triangle.2.circlepath" : "desktopcomputer",
+                         colour: .yellow, busy: true,
+                         title: again ? "Reconnecting" : "Connecting", detail: name)
+        case .idle:
+            if status.computers.isEmpty {
+                return .init(symbol: "qrcode", colour: .orange, busy: false,
+                             title: "Pair a computer",
+                             detail: "Scan the code on your computer with awmouse on iPhone.")
             }
-        } else {
-            // The phone app is there and has not said anything yet.
-            dot(.yellow, "iPhone", detail: "waiting", busy: true)
+            let target = status.current ?? status.computers.first
+            let rescan = status.note == "scan the code on iPhone"
+            return .init(symbol: "desktopcomputer", colour: .orange, busy: false,
+                         title: name ?? "Not connected",
+                         detail: status.note ?? "Not connected.",
+                         // A computer that wants its code scanned again can
+                         // only be fixed on the phone; anything else, the watch
+                         // can ask to try again.
+                         action: rescan ? nil : target.map { computer in
+                             .init(label: "Connect") { controller.choose(computer) }
+                         })
         }
     }
 
     static func label(_ computer: KnownComputer) -> String {
         computer.name.isEmpty ? "computer" : computer.name
     }
-
-    /// `busy` pulses the light, for the states that are on their way
-    /// somewhere: a steady light reads as settled, and "connecting" that sits
-    /// still looks exactly like "connecting" that has hung.
-    ///
-    /// A symbol effect rather than a hand-rolled repeating animation. The
-    /// system starts and stops it with `isActive`; a `repeatForever`
-    /// animation keyed on view state is notorious for not stopping when the
-    /// state moves on, which here would be a green light still flashing.
-    private func dot(_ colour: Color, _ text: String, detail: String? = nil,
-                     busy: Bool = false) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: "circle.fill")
-                .font(.system(size: 6))
-                .foregroundStyle(colour)
-                .symbolEffect(.pulse, options: .repeating, isActive: busy)
-            Text(text)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            // The name gives way to the state, not the other way round: the
-            // state is what the user needs to read.
-            if let detail {
-                Text(detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-            }
-        }
-    }
 }
 
-/// The whole screen, because there is nothing else the watch can do: every
-/// gesture goes through the phone app, and it is not running.
-///
-/// It got here because the watch asked the phone to start the app and
-/// nothing came back — which is what happens after the app has been swiped
-/// out of the app switcher. iOS reads that as "stop running this" and will not
-/// launch it again for anything until it is opened by hand. The watch is
-/// advertising Handoff meanwhile, so the phone shows awmouse on its lock
-/// screen and in the app switcher: one tap rather than a search.
-private struct PhoneMissingView: View {
+/// One state, taking the whole screen: a symbol, what is happening, and what
+/// if anything to do about it.
+private struct StateScreen: View {
+    struct Action {
+        let label: String
+        let run: () -> Void
+    }
+
+    struct State {
+        var symbol: String
+        var colour: Color
+        /// Pulses the symbol, for states on their way somewhere. A symbol
+        /// effect rather than a hand-rolled repeating animation: the system
+        /// starts and stops it with `isActive`, where a `repeatForever`
+        /// animation keyed on state is notorious for not stopping.
+        var busy: Bool
+        var title: String
+        var detail: String?
+        var action: Action?
+    }
+
+    let state: State
+
     var body: some View {
         VStack(spacing: 8) {
-            Image(systemName: "iphone")
+            Image(systemName: state.symbol)
                 .font(.system(size: 34))
-                .foregroundStyle(Color.orange)
-                .symbolEffect(.pulse, options: .repeating)
-            Text("Open awmouse\non your iPhone")
+                .foregroundStyle(state.colour)
+                .symbolEffect(.pulse, options: .repeating, isActive: state.busy)
+            Text(state.title)
                 .font(.headline)
                 .multilineTextAlignment(.center)
-            Text("Your watch reaches the computer through it. It's on your iPhone's lock screen.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .lineLimit(2)
+            if let detail = state.detail {
+                Text(detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            if let action = state.action {
+                Button(action.label, action: action.run)
+                    .padding(.top, 2)
+            }
         }
         .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

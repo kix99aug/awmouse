@@ -143,6 +143,21 @@ final class TrackpadGesture: ObservableObject {
         if primary != nil { finish() }
     }
 
+    /// The trackpad is leaving the screen with a finger possibly still on it
+    /// — the link dropped mid-gesture and the watch is showing its state
+    /// instead. Whatever was under way is dropped without clicking, except a
+    /// held button, which is let go: the computer would otherwise go on
+    /// holding it down, selecting, until something else released it.
+    func abandon() {
+        cancelHold()
+        if case .dragging = mode { controller.press(.left, down: false) }
+        primary = nil
+        pressing = false
+        travelled = 0
+        mostFingers = 0
+        mode = .undecided
+    }
+
     // MARK: - Press lifecycle
 
     private func begin(with active: [SpatialEventCollection.Event]) {
